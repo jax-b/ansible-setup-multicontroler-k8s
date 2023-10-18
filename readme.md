@@ -3,6 +3,12 @@ This ansible playbook is written to attempt to initialize a cluster if one does
 not already exists. Then join each of the worker nodes to that cluster. 
 Finally, it will install the latest version of the Weave CNI. 
 
+I run by the motto
+> If the playbook cannot handle a existing installation and update it
+> then why use ansible
+This playbook Will not overwrite a existing installation if you have one, 
+it will join new nodes to the cluster though
+
 I made this from my home lab. if you want to use it in a production
 environment, I recommend you 
  - double check this playbook
