@@ -459,6 +459,29 @@
         group: Ansible
         flat: true
 
+- name: Open Weave Ports
+  hosts: 
+   - k8cdrs
+   - k8wkrs
+  tags:
+    - pod_deploy
+    - weave_cni
+  become: true
+  tasks:
+    - name: Configure UFW 6783/TCP for weave CNI
+      community.general.ufw:
+        rule: allow
+        port: 6783
+        protocol: tcp
+        comment: Allow 6783/TCP for weave CNI
+
+    - name: Configure UFW services 6783:6784 for weave CNI
+      community.general.ufw:
+        rule: allow
+        port: 6783:6784
+        protocol: udp
+        comment: Allow 6783:6784/UDP for weave CNI
+
 - name: Deploy Baseline Pods
   hosts: localhost
   tags:
