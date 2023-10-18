@@ -1,0 +1,483 @@
+---
+- name: Setup k8s proxy
+  hosts: k8proxy
+  become: true
+  vars:
+    conductor_plane_group: k8cdrs
+    kube_control_nodes: |-
+      "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
+  handlers:
+    - name: Restart HAProxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+  tasks:
+    - name: Install haproxy
+      ansible.builtin.apt:
+        name: haproxy
+        state: present
+
+    - name: Copy haproxy config
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart HAProxy
+
+    - name: Generate Private Key Certs
+      community.crypto.openssl_privatekey:
+        path: /etc/ssl/private/kube_certs.key
+        mode: "0440"
+        owner: root
+        group: root
+        type: ECC
+        curve: secp521r1
+      notify: Restart HAProxy
+
+    - name: Copy Openssl Config
+      ansible.builtin.template:
+        src: server_openssl.conf.j2
+        dest: /etc/ssl/certs/kube_certs.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Generate Public Key Certs
+      ansible.builtin.command:
+        cmd: |-
+          openssl req
+          -x509
+          -new
+          -sha512
+          -nodes
+          -key /etc/ssl/private/kube_certs.key
+          -config /etc/ssl/certs/kube_certs.conf
+          -days 7307
+          -out /etc/ssl/certs/kube_certs.crt
+        creates: /etc/ssl/certs/kube_certs.crt
+      notify: Restart HAProxy
+
+    - name: Configure UFW services
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        protocol: tcp
+        comment: Allow {{ item }} for HAProxy to kubeadm
+      with_items:
+        - 6443
+
+- name: Install Kubernetes
+  hosts:
+    - k8cdrs
+    - k8wkrs
+  tags:
+    - install_k8s
+  become: true
+  handlers:
+    - name: Enable noswap service
+      ansible.builtin.systemd:
+        name: noswap
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Restart Containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        enabled: true
+        daemon_reload: true
+  tasks:
+    - name: Create Docker group
+      ansible.builtin.group:
+        name: docker
+        state: present
+        gid: 520
+
+    - name: Create Docker user
+      ansible.builtin.user:
+        name: docker
+        group: docker
+        uid: 520
+        state: present
+
+    - name: Add Ansible to docker
+      ansible.builtin.user:
+        name: Ansible
+        groups: docker
+        append: true
+
+    - name: Add conf for containerd
+      ansible.builtin.blockinfile:
+        path: /etc/modules-load.d/containerd.conf
+        mode: "0640"
+        group: docker
+        owner: root
+        create: true
+        block: |
+          overlay
+          br_netfilter
+
+    - name: Install Overlay and netfilter moduels
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - overlay
+        - br_netfilter
+
+    - name: Add sysctl conf for containerd
+      ansible.posix.sysctl:
+        sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
+        state: present
+        name: "{{ item }}"
+        reload: true
+        value: "1"
+      with_items:
+        - net.bridge.bridge-nf-call-iptables
+        - net.ipv4.ip_forward
+        - net.bridge.bridge-nf-call-ip6tables
+
+    - name: Add docker gpg key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Kubernetes apt key
+      ansible.builtin.apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+
+    - name: Add docker repository
+      ansible.builtin.apt_repository:
+        repo: |-
+          deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Add Kubernetes repository
+      ansible.builtin.apt_repository:
+        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+
+    - name: Write noswap systemd service config file
+      ansible.builtin.template:
+        src: noswap.service.j2
+        dest: /etc/systemd/system/noswap.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Enable noswap service
+
+    - name: Install docker and kube packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - kubelet
+          - kubecolor
+          - kubeadm
+          - kubectl
+          - apt-transport-https
+        state: present
+
+    - name: Enable docker and kube
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      with_items:
+        - docker
+        - kubelet
+        - containerd
+
+    - name: Copy containerd config
+      ansible.builtin.copy:
+        src: containerd.toml
+        dest: /etc/containerd/config.toml
+        mode: "0644"
+        owner: root
+        group: root
+      notify: Restart Containerd
+
+- name: Open Firewall on the control plane
+  hosts: k8cdrs
+  become: true
+  tasks:
+    - name: Open Control Plane Ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        protocol: tcp
+        comment: Allow {{ item }} kubeadm
+      with_items:
+        - 6443
+        - 10250
+        - 10259
+        - 10257
+        - 2379
+        - 2380
+        - 2381
+
+- name: Open Firewall on the worker nodes
+  hosts: k8wkrs
+  become: true
+  tasks:
+    - name: Open Worker node Plane Kublet Port
+      community.general.ufw:
+        rule: allow
+        port: "10250"
+        protocol: tcp
+        comment: Allow 10250 Kublet Port
+    - name: Open Worker node Plane NodePort Services
+      community.general.ufw:
+        rule: allow
+        port: 30000:32767
+        protocol: tcp
+        comment: Allow 30000:32767 NodePort Services
+
+- name: Initialize the first Control Plane
+  tags:
+    - control_init
+  become: true
+  hosts: k8cdrs[0]
+  strategy: linear
+  vars:
+    kube_network_real: "{{ kube_network | default('172.20.0.0/16') }}"
+    kube_network_control_real: "{{ kube_network | default('172.21.0.0/16') }}"
+  handlers:
+    - name: Restart HAProxy
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
+        daemon_reload: true
+  tasks:
+    - name: Check kube cluster is already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kube_config
+
+    - name: Gather proxy facts
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      delegate_facts: true
+      ansible.builtin.gather_facts:
+      when: not kube_config.stat.exists
+
+    - name: Set Load Balancer to first node
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        kube_control_nodes:
+          - "{{ groups['k8cdrs'][0] }}"
+      when: not kube_config.stat.exists
+      notify: Restart HAProxy
+
+    - name: Slurp Proxy Certs
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.slurp:
+        src: /etc/ssl/certs/kube_certs.crt
+      register: proxy_cert
+      changed_when: false
+
+    - name: Slurp Proxy key
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.slurp:
+        src: /etc/ssl/private/kube_certs.key
+      register: proxy_key
+      changed_when: false
+
+    - name: Write Proxy Cert
+      ansible.builtin.copy:
+        content: "{{ proxy_cert.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.crt
+        owner: kube
+        group: docker
+        mode: "0444"
+
+    - name: Write Proxy key
+      ansible.builtin.copy:
+        content: "{{ proxy_key.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.key
+        owner: kube
+        group: docker
+        mode: "0440"
+
+    - name: Flush Handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure Containerd is started
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+        enabled: true
+
+    - name: Check init_cluster
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm init
+          --control-plane-endpoint "{{ groups["k8proxy"][0] }}:6443"
+          --upload-certs
+          --pod-network-cidr "{{ kube_network_real }}"
+          --feature-gates="PublicKeysECDSA=true"
+        creates: /etc/kubernetes/admin.conf
+      register: adm_output
+      when: not kube_config.stat.exists
+      changed_when: '"Your Kubernetes control-plane has initialized successfully!" in adm_output.stdout'
+
+- name: Join Other Control Nodes
+  hosts: k8cdrs[1:]
+  strategy: linear
+  tags:
+    - control_init
+  vars:
+    kube_network_real: "{{ kube_network | default('172.20.0.0/16') }}"
+    kube_network_control_real: "{{ kube_network | default('172.21.0.0/16') }}"
+  handlers:
+    - name: Restart HAProxy
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      run_once: true # noqa: run-once
+      become: true
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
+        daemon_reload: true
+    - name: Get certificate key
+      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      run_once: true # noqa: run-once
+      ansible.builtin.command:
+        cmd: sudo kubeadm init phase upload-certs --upload-certs
+      register: certificate_key
+      changed_when: false
+  tasks:
+    - name: Determin if Node Needs Join the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: node_active
+      changed_when: false
+
+    - name: Check if we need the join key
+      ansible.builtin.debug:
+        msg: Check in progress
+      changed_when: not node_active.stat.exists
+      notify: Get certificate key
+
+    - name: If we need to get the key lets get it
+      ansible.builtin.meta: flush_handlers
+
+    - name: Get Join Command
+      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      become: true
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm token create
+          --print-join-command
+          --certificate-key "{{ certificate_key.stdout_lines[-1] }}"
+          --ttl 15m
+          --description "Ansible Node {{ inventory_hostname_short }} Join Command"
+      register: join_command
+      changed_when: true
+      when: not node_active.stat.exists
+
+    - name: Join Node to cluster
+      become: true
+      ansible.builtin.command:
+        cmd: "{{ join_command.stdout }}"
+        creates: /etc/kubernetes/admin.conf
+      register: joined_to_cluster_test
+      when: not node_active.stat.exists
+
+    - name: Gather proxy facts
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      delegate_facts: true
+      ansible.builtin.gather_facts:
+      when: joined_to_cluster_test.changed # noqa: no-handler
+
+    - name: Set Load Balancer to all nodes
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      become: true
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        kube_control_nodes: "{{ groups['k8cdrs'] }}"
+      notify: Restart HAProxy
+      when: joined_to_cluster_test.changed # noqa: no-handler
+
+- name: Join Worker Nodes
+  hosts: k8wkrs
+  tasks:
+    - name: Check if node needs join
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: node_needs_join
+      changed_when: false
+
+    - name: Get Join Command
+      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      become: true
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm token create
+          --print-join-command
+          --ttl 15m
+          --description 'Ansible Node {{ inventory_hostname_short }} Join Command'
+      register: node_join_command
+      changed_when: not node_needs_join.stat.exists
+      when: not node_needs_join.stat.exists
+
+    - name: Join Node to cluster
+      become: true
+      ansible.builtin.command:
+        cmd: "{{ node_join_command.stdout }}"
+        creates: /etc/kubernetes/kubelet.conf
+      when: not node_needs_join.stat.exists
+
+- name: Copy ADM Config
+  hosts: k8cdrs[0]
+  tasks:
+    - name: Copy K8s Admin Config to /Share/k8s
+      become: true
+      ansible.builtin.fetch:
+        remote_src: true
+        src: /etc/kubernetes/admin.conf
+        dest: /share/k8s/admin.conf
+        mode: "0440"
+        owner: Ansible
+        group: Ansible
+        flat: true
+
+- name: Deploy Baseline Pods
+  hosts: localhost
+  tags:
+    - pod_deploy
+  tasks:
+    - name: Install Latest Weave Version
+      tags:
+        - weave_cni
+      block:
+        - name: Get Weave Latest Version Info
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/weaveworks/weave/releases/latest
+          register: weave_version
+        - name: Setup Weave CNI networking
+          tags:
+            - weave_cni
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            src: https://github.com/weaveworks/weave/releases/download/{{ weave_version.json.tag_name }}/weave-daemonset-k8s.yaml

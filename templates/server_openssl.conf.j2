@@ -1,0 +1,19 @@
+basicConstraints = CA:TRUE
+keyUsage = cRLSign, keyCertSign, digitalSignature
+[req]
+distinguished_name = req_distinguished_name
+prompt = no
+x509_extensions = v3_ext
+[req_distinguished_name]
+CN = "{{ inventory_hostname_short }}"
+[req_ext]
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = {{ inventory_hostname }}
+IP.1 = {{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}
+[ v3_ext ]
+authorityKeyIdentifier=keyid,issuer:always
+basicConstraints=CA:TRUE
+keyUsage=keyEncipherment,dataEncipherment,cRLSign,keyCertSign,digitalSignature
+extendedKeyUsage=serverAuth,clientAuth
+subjectAltName=@alt_names
