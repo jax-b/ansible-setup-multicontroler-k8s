@@ -473,9 +473,30 @@
             url: https://api.github.com/repos/weaveworks/weave/releases/latest
           register: weave_version
         - name: Setup Weave CNI networking
-          tags:
-            - weave_cni
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
             state: present
             src: https://github.com/weaveworks/weave/releases/download/{{ weave_version.json.tag_name }}/weave-daemonset-k8s.yaml
+    - name: Install the K8s Dashboard
+      tags:
+        - k8s_dashboard
+      block:
+        - name: Get Latest k8s Dashboard
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
+          register: dashboard_version_info
+        - name: Compute version
+          ansible.builtin.set_fact:
+            dashboard_version: |-
+              {%- set found_version = [false] -%}
+              {%- for item in dashboard_version_info.json -%}
+              {%- if not found_version[0] and not item.draft and not item.prerelease and "-alpha" not in item.name and "-beta" not in item.name -%}
+              {{- item.name -}}
+              {{- found_version.insert(0, true) -}}
+              {%- endif -%}
+              {%- endfor -%}
+        - name: Deploy K8s Dashboard
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            src: https://raw.githubusercontent.com/kubernetes/dashboard/{{ dashboard_version }}/aio/deploy/recommended.yaml
