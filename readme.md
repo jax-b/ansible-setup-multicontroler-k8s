@@ -31,4 +31,6 @@ There is a small amount of configurable to this see table
   - Custom Pod Network CIDR via the variable `kube_network_real`
   - Skip Install of the Weave CNI via `--skip-tags weave_cni`
   - Skip Install of the K8s Dashboard via `--skip-tags k8s_dashboard`
+  - Skip Install of the MetalLB Network LB via `--skip-tags metallb`
+  - Skip Install of the Traefik Ingest Controller via `--skip-tags traefik_ingest`
   - Skip All Pod deployments via `--skip-tags pod_deploy`
