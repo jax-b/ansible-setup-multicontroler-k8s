@@ -493,9 +493,9 @@
   vars:
     metallb_address_pool_real:
       "{{ metallb_address_pool | default('172.25.0.10/32') }}"
-    haproxy_address: "{{ metallb_address_pool | default('172.25.0.10') }}"
+    traefik_address_real: "{{ traefik_address | default('172.25.0.10') }}"
   tasks:
-    - name: Install Latest Weave Version
+    - name: Install the Latest Weave Version
       tags:
         - weave_cni
       block:
@@ -623,3 +623,33 @@
                 namespace: metallb-system
               spec:
                 IPAddressPool: servernet-k8s-address-pool
+
+    - name: Install the Traefik Ingest controller
+      tags:
+        - traefik_ingest
+      block:
+        - name: Install the Traefik Helm repo
+          kubernetes.core.helm_repository:
+            kubeconfig: /share/k8s/admin.conf
+            repo_name: traefik
+            repo_state: present
+            repo_url: https://traefik.github.io/charts
+        - name: Install the Traefic Ingest controller
+          kubernetes.core.helm:
+            kubeconfig: /share/k8s/admin.conf
+            chart_ref: traefik/traefik
+            name: traefik
+            state: present
+            release_namespace: traefik
+            create_namespace: true
+        - name: Set Traefic LB IP
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: patched
+            kind: Service
+            namespace: traefik
+            name: traefik
+            definition:
+              metadata:
+                annotations:
+                  metallb.universe.tf/loadBalancerIPs: "{{ traefik_address_real }}"
