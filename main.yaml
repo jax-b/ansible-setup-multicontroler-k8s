@@ -332,7 +332,9 @@
         creates: /etc/kubernetes/admin.conf
       register: adm_output
       when: not kube_config.stat.exists
-      changed_when: '"Your Kubernetes control-plane has initialized successfully!" in adm_output.stdout'
+      changed_when:
+        '"Your Kubernetes control-plane"
+        " has initialized successfully!" in adm_output.stdout'
 
 - name: Join Other Control Nodes
   hosts: k8cdrs[1:]
@@ -344,7 +346,7 @@
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
-      run_once: true # noqa: run-once
+      run_once: true  # noqa: run-once
       become: true
       ansible.builtin.systemd:
         name: haproxy
@@ -353,7 +355,7 @@
         daemon_reload: true
     - name: Get certificate key
       delegate_to: "{{ groups['k8cdrs'][0] }}"
-      run_once: true # noqa: run-once
+      run_once: true  # noqa: run-once
       ansible.builtin.command:
         cmd: sudo kubeadm init phase upload-certs --upload-certs
       register: certificate_key
@@ -383,7 +385,8 @@
           --print-join-command
           --certificate-key "{{ certificate_key.stdout_lines[-1] }}"
           --ttl 15m
-          --description "Ansible Node {{ inventory_hostname_short }} Join Command"
+          --description
+          "Ansible Node {{ inventory_hostname_short }} Join Command"
       register: join_command
       changed_when: true
       when: not node_active.stat.exists
@@ -400,7 +403,7 @@
       delegate_to: "{{ groups['k8proxy'][0] }}"
       delegate_facts: true
       ansible.builtin.gather_facts:
-      when: joined_to_cluster_test.changed # noqa: no-handler
+      when: joined_to_cluster_test.changed  # noqa: no-handler
 
     - name: Set Load Balancer to all nodes
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -414,7 +417,7 @@
       vars:
         kube_control_nodes: "{{ groups['k8cdrs'] }}"
       notify: Restart HAProxy
-      when: joined_to_cluster_test.changed # noqa: no-handler
+      when: joined_to_cluster_test.changed  # noqa: no-handler
 
 - name: Join Worker Nodes
   hosts: k8wkrs
@@ -433,7 +436,8 @@
           kubeadm token create
           --print-join-command
           --ttl 15m
-          --description 'Ansible Node {{ inventory_hostname_short }} Join Command'
+          --description
+          'Ansible Node {{ inventory_hostname_short }} Join Command'
       register: node_join_command
       changed_when: not node_needs_join.stat.exists
       when: not node_needs_join.stat.exists
@@ -460,9 +464,9 @@
         flat: true
 
 - name: Open Weave Ports
-  hosts: 
-   - k8cdrs
-   - k8wkrs
+  hosts:
+    - k8cdrs
+    - k8wkrs
   tags:
     - pod_deploy
     - weave_cni
@@ -486,6 +490,10 @@
   hosts: localhost
   tags:
     - pod_deploy
+  vars:
+    metallb_address_pool_real:
+      "{{ metallb_address_pool | default('172.25.0.10/32') }}"
+    haproxy_address: "{{ metallb_address_pool | default('172.25.0.10') }}"
   tasks:
     - name: Install Latest Weave Version
       tags:
@@ -497,29 +505,121 @@
           register: weave_version
         - name: Setup Weave CNI networking
           kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf
+            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
             state: present
-            src: https://github.com/weaveworks/weave/releases/download/{{ weave_version.json.tag_name }}/weave-daemonset-k8s.yaml
+            src: >
+              https://github.com/weaveworks/weave/releases/download/
+              {{- weave_version.json.tag_name -}}/weave-daemonset-k8s.yaml
+
     - name: Install the K8s Dashboard
       tags:
         - k8s_dashboard
       block:
         - name: Get Latest k8s Dashboard
           ansible.builtin.uri:
-            url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
+            url:
+              https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
           register: dashboard_version_info
         - name: Compute version
           ansible.builtin.set_fact:
             dashboard_version: |-
               {%- set found_version = [false] -%}
               {%- for item in dashboard_version_info.json -%}
-              {%- if not found_version[0] and not item.draft and not item.prerelease and "-alpha" not in item.name and "-beta" not in item.name -%}
+              {%- if not found_version[0] and not item.draft -%}
+              {%- if not item.prerelease -%}
+              {%- if "-alpha" not in item.name and "-beta" not in item.name -%}
               {{- item.name -}}
               {{- found_version.insert(0, true) -}}
-              {%- endif -%}
+              {%- endif -%}{%- endif -%}{%- endif -%}
               {%- endfor -%}
         - name: Deploy K8s Dashboard
           kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
+            state: present
+            src: >
+              https://raw.githubusercontent.com/kubernetes/dashboard/
+              {{- dashboard_version -}}/aio/deploy/recommended.yaml
+
+    - name: Install the MetalLB contoller
+      tags:
+        - metallb
+      block:
+        - name: Get Latest MetalLB version
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/metallb/metallb/releases/latest
+          register: metallb_version_info
+
+        - name: Ensure Strict ARP is disabled
+          block:
+            - name: Get Current Config
+              kubernetes.core.k8s_info:
+                kubeconfig: /share/k8s/admin.conf
+                kind: configmap
+                namespace: kube-system
+                name: kube-proxy
+              register: k8s_kube_proxy_raw
+            - name: Update Config
+              ansible.builtin.set_fact:
+                k8s_kube_prox_data: >
+                  "{{
+                    k8s_kube_proxy_raw.resources[0].data['config.conf']
+                    | from_yaml
+                    | combine(
+                      {
+                        'ipvs': {
+                          'strictARP': true
+                        }
+                      },
+                      recursive=True
+                    )
+                    | to_nice_yaml(width=80, indent=2)
+                  }}"
+            - name: Ensure Strict ARP is disabled
+              kubernetes.core.k8s:
+                kubeconfig: /share/k8s/admin.conf
+                kind: configmap
+                namespace: kube-system
+                name: kube-proxy
+                state: present
+                definition:
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: kube-proxy
+                    namespace: kube-system
+                  data:
+                    config.conf: "{{ k8s_kube_prox_data }}"
+
+        - name: Deploy K8s MetalLB
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
+            state: present
+            src: >
+              https://raw.githubusercontent.com/metallb/metallb/
+              {{- metallb_version_info.json.tag_name -}}/config/
+              manifests/metallb-native.yaml
+        - name: Install Pod Networking Addresses
+          kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
             state: present
-            src: https://raw.githubusercontent.com/kubernetes/dashboard/{{ dashboard_version }}/aio/deploy/recommended.yaml
+            definition:
+              apiVersion: metallb.io/v1beta1
+              kind: IPAddressPool
+              metadata:
+                name: servernet-k8s-address-pool
+                namespace: metallb-system
+              spec:
+                addresses: "{{ metallb_address_pool_real }}"
+                autoAssign: true
+        - name: Install Pod L2 config
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            definition:
+              apiVersion: metallb.io/v1beta1
+              kind: L2Advertisement
+              metadata:
+                name: servernet-k8s-l2-advertisment
+                namespace: metallb-system
+              spec:
+                IPAddressPool: servernet-k8s-address-pool
