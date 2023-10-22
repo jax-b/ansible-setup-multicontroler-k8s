@@ -7,7 +7,7 @@ I run by the motto
 > If the playbook cannot handle a existing installation and update it
 > then why use ansible
 This playbook Will not overwrite a existing installation if you have one,
-it will join new nodes to the cluster though
+it will join new nodes to the cluster though.
 
 I made this from my home lab. if you want to use it in a production
 environment, I recommend you
@@ -34,3 +34,9 @@ There is a small amount of configurable to this see table
   - Skip Install of the MetalLB Network LB via `--skip-tags metallb`
   - Skip Install of the Traefik Ingest Controller via `--skip-tags traefik_ingest`
   - Skip All Pod deployments via `--skip-tags pod_deploy`
+
+If you run this playbook with all features enabled you will have a fully
+functional K8s cluster without persistent storage. I leave it up to use to
+choose your storage controller as its highly dependent as to what you available.
+My lab is hyper-converged using proxmox and the CEPH storage system, so im using
+the ceph-cni helm chart as my persistent storage.
