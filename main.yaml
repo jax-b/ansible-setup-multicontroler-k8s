@@ -4,7 +4,7 @@
   become: true
   vars:
     conductor_plane_group: k8cdrs
-    kube_control_nodes: |-
+    kube_control_nodes: 
       "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
   handlers:
     - name: Restart HAProxy
@@ -247,7 +247,8 @@
   hosts: k8cdrs[0]
   strategy: linear
   vars:
-    kube_network_real: "{{ kube_network | default('172.20.0.0/16') }}"
+    kube_network_real: "{{ kube_network | default('10.244.0.0/16') }}"
+    kube_service_network_real: "{{ kube_service_network | default('10.96.0.0/16') }}"
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -328,6 +329,7 @@
           --control-plane-endpoint "{{ groups["k8proxy"][0] }}:6443"
           --upload-certs
           --pod-network-cidr "{{ kube_network_real }}"
+          --service-cidr "{{ kube_service_network_real }}"
           --feature-gates="PublicKeysECDSA=true"
         creates: /etc/kubernetes/admin.conf
       register: adm_output
@@ -341,8 +343,6 @@
   strategy: linear
   tags:
     - control_init
-  vars:
-    kube_network_real: "{{ kube_network | default('172.20.0.0/16') }}"
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -421,6 +421,8 @@
 
 - name: Join Worker Nodes
   hosts: k8wkrs
+  vars:
+    kube_service_network_real: "{{ kube_network | default('10.96.0.0/16') }}"
   tasks:
     - name: Check if node needs join
       ansible.builtin.stat:
@@ -448,6 +450,12 @@
         cmd: "{{ node_join_command.stdout }}"
         creates: /etc/kubernetes/kubelet.conf
       when: not node_needs_join.stat.exists
+
+    - name: Open UFW to service network
+      community.general.ufw:
+        rule: allow
+        to_ip: "{{ kube_service_network_real }}"
+        from_ip: "{{ kube_service_network_real }}"
 
 - name: Copy ADM Config
   hosts: k8cdrs[0]
@@ -634,7 +642,7 @@
             repo_name: traefik
             repo_state: present
             repo_url: https://traefik.github.io/charts
-        - name: Install the Traefic Ingest controller
+        - name: Install the Traefik Ingest controller
           kubernetes.core.helm:
             kubeconfig: /share/k8s/admin.conf
             chart_ref: traefik/traefik
@@ -642,7 +650,7 @@
             state: present
             release_namespace: traefik
             create_namespace: true
-        - name: Set Traefic LB IP
+        - name: Set Traefik LB IP
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
             state: patched
@@ -653,3 +661,23 @@
               metadata:
                 annotations:
                   metallb.universe.tf/loadBalancerIPs: "{{ traefik_address_real }}"
+
+- name: Open Traefik Ports on Worker Nodes
+  hosts: k8wkrs
+  tags:
+    - pod_deploy
+    - traefik_ingest
+  vars:
+    traefik_address_real: "{{ traefik_address | default('172.25.0.10') }}"
+  become: true
+  tasks:
+    - name: Expose Traefik ports
+      community.general.ufw:
+        rule: allow
+        name: "{{ item }}"
+        to_ip: "{{ traefik_address_real }}"
+        comment: Allow {{ item }} for Traefik
+        delete: true
+      with_items:
+        - http
+        - https
