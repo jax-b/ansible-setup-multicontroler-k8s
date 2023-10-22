@@ -4,7 +4,7 @@
   become: true
   vars:
     conductor_plane_group: k8cdrs
-    kube_control_nodes: 
+    kube_control_nodes:
       "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
   handlers:
     - name: Restart HAProxy
@@ -602,7 +602,7 @@
           register:
             metal_deployed
 
-        - name: Wait for metal to startup
+        - name: Wait for metal to startup # noqa: no-handler
           when: metal_deployed.changed
           ansible.builtin.wait_for:
             delay: 60
