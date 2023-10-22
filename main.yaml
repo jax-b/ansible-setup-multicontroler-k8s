@@ -452,6 +452,7 @@
       when: not node_needs_join.stat.exists
 
     - name: Open UFW to service network
+      become: true
       community.general.ufw:
         rule: allow
         to_ip: "{{ kube_service_network_real }}"
@@ -559,29 +560,21 @@
 
         - name: Ensure Strict ARP is disabled
           block:
-            - name: Get Current Config
+            - name: Get Cluster Current Config
               kubernetes.core.k8s_info:
                 kubeconfig: /share/k8s/admin.conf
                 kind: configmap
                 namespace: kube-system
                 name: kube-proxy
+
               register: k8s_kube_proxy_raw
-            - name: Update Config
+            - name: Parse Config Data
               ansible.builtin.set_fact:
-                k8s_kube_prox_data: >
-                  "{{
-                    k8s_kube_proxy_raw.resources[0].data['config.conf']
-                    | from_yaml
-                    | combine(
-                      {
-                        'ipvs': {
-                          'strictARP': true
-                        }
-                      },
-                      recursive=True
-                    )
-                    | to_nice_yaml(width=80, indent=2)
-                  }}"
+                k8s_kube_prox_data_parsed: "{{ k8s_kube_proxy_raw.resources[0].data['config.conf'] | replace('\"', '') | from_yaml }}"
+            - name: Update Config Data
+              ansible.builtin.set_fact:
+                k8s_kube_prox_data: "{{ k8s_kube_prox_data_parsed | combine({'ipvs': {'strictARP': false}}, recursive=True) }}"
+
             - name: Ensure Strict ARP is disabled
               kubernetes.core.k8s:
                 kubeconfig: /share/k8s/admin.conf
@@ -596,16 +589,24 @@
                     name: kube-proxy
                     namespace: kube-system
                   data:
-                    config.conf: "{{ k8s_kube_prox_data }}"
+                    config.conf: "{{ k8s_kube_prox_data | to_nice_yaml(width=80, indent=2) }}"
 
         - name: Deploy K8s MetalLB
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf  # noqa: jinja
             state: present
-            src: >
+            src: >-
               https://raw.githubusercontent.com/metallb/metallb/
-              {{- metallb_version_info.json.tag_name -}}/config/
+              {{- metallb_version_info.json.tag_name -}}/config/{{- '' -}}
               manifests/metallb-native.yaml
+          register:
+            metal_deployed
+
+        - name: Wait for metal to startup
+          when: metal_deployed.changed
+          ansible.builtin.wait_for:
+            delay: 60
+
         - name: Install Pod Networking Addresses
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
@@ -619,6 +620,7 @@
               spec:
                 addresses: "{{ metallb_address_pool_real }}"
                 autoAssign: true
+
         - name: Install Pod L2 config
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
