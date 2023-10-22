@@ -15,28 +15,34 @@ environment, I recommend you
  - add package pinning for you cluster
  - Use your own CA for cluster certificates vs Self-Signed
 
-This playbook requires 3 different host groups to be set up:
- -  k8proxy
- -  k8cdrs (2-7)
- -  k8wkrs (0-X)
+If you run this playbook with all features enabled you will have a fully
+functional K8s cluster without persistent storage. I leave it up to use to
+choose your storage controller as its highly dependent as to what you available.
+My lab is hyper-converged using proxmox and the CEPH storage system, so im using
+the ceph-cni helm chart as my persistent storage.
 
-I am personally running:
-|   type  | qty |
-| ------- |-----|
-| k8proxy | 1   |
-| k8cdrs  | 3   |
-| k8wkrs  | 3   |
+The Kube and Traefik dashboards can be setup on your own terms to be exposed but remain at the default configuration of needing kubectl proxy to access them
 
+### Configuration
 There is a small amount of configurable to this see table
-  - Custom Pod Network CIDR via the variable `kube_network_real`
+  - Custom Pod Network CIDR via the variable `kube_network`
+  - Custom Service Network CIDR via the variable `kube_service_network`
   - Skip Install of the Weave CNI via `--skip-tags weave_cni`
   - Skip Install of the K8s Dashboard via `--skip-tags k8s_dashboard`
   - Skip Install of the MetalLB Network LB via `--skip-tags metallb`
   - Skip Install of the Traefik Ingest Controller via `--skip-tags traefik_ingest`
   - Skip All Pod deployments via `--skip-tags pod_deploy`
 
-If you run this playbook with all features enabled you will have a fully
-functional K8s cluster without persistent storage. I leave it up to use to
-choose your storage controller as its highly dependent as to what you available.
-My lab is hyper-converged using proxmox and the CEPH storage system, so im using
-the ceph-cni helm chart as my persistent storage.
+#### Required Host Groups
+This playbook requires 3 different host groups to be set up:
+ -  k8proxy
+ -  k8cdrs (2-7)
+ -  k8wkrs (0-X)
+
+#### My Setup
+I am personally running:
+|   type  | qty |
+| ------- |-----|
+| k8proxy | 1   |
+| k8cdrs  | 3   |
+| k8wkrs  | 3   |
