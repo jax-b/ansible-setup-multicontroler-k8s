@@ -1,0 +1,36 @@
+---
+- name: Teadown K8S
+  hosts:
+    - k8cdrs
+    - k8wkrs
+  become: true
+  strategy: free # noqa: run-once[play]
+  tasks:
+    - name: User Consent
+      ansible.builtin.pause:
+        prompt: |-
+          This will remove all of your K8s clusters and all data associated with it.
+          Have a backup if you not sure.
+
+          Press return to continue. Press Ctrl+c and then "a" to abort
+    - name: Remove CNI info
+      ansible.builtin.file:
+        state: absent
+        path: /opt/cni/bin/
+    - name: Reset kubeadm
+      ansible.builtin.command:
+        cmd: kubeadm reset --force --cleanup-tmp-dir
+      changed_when: true
+    - name: Uninstall kube tools
+      ansible.builtin.apt:
+        name:
+          - kubeadm
+          - kubectl
+          - kubelet
+          - kubernetes-cni
+          - kube*
+        purge: true
+        state: absent
+        autoremove: true
+    - name: Reboot
+      ansible.builtin.reboot:

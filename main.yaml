@@ -4,8 +4,7 @@
   become: true
   vars:
     conductor_plane_group: k8cdrs
-    kube_control_nodes:
-      "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
+    kube_control_nodes: "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
   handlers:
     - name: Restart HAProxy
       ansible.builtin.systemd:
@@ -247,7 +246,7 @@
   hosts: k8cdrs[0]
   strategy: linear
   vars:
-    kube_network_real: "{{ kube_network | default('10.244.0.0/16') }}"
+    kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
     kube_service_network_real: "{{ kube_service_network | default('10.96.0.0/16') }}"
   handlers:
     - name: Restart HAProxy
@@ -334,9 +333,7 @@
         creates: /etc/kubernetes/admin.conf
       register: adm_output
       when: not kube_config.stat.exists
-      changed_when:
-        '"Your Kubernetes control-plane"
-        " has initialized successfully!" in adm_output.stdout'
+      changed_when: '"Your Kubernetes control-plane" " has initialized successfully!" in adm_output.stdout'
 
 - name: Join Other Control Nodes
   hosts: k8cdrs[1:]
@@ -346,7 +343,7 @@
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
-      run_once: true  # noqa: run-once
+      run_once: true # noqa: run-once
       become: true
       ansible.builtin.systemd:
         name: haproxy
@@ -355,7 +352,7 @@
         daemon_reload: true
     - name: Get certificate key
       delegate_to: "{{ groups['k8cdrs'][0] }}"
-      run_once: true  # noqa: run-once
+      run_once: true # noqa: run-once
       ansible.builtin.command:
         cmd: sudo kubeadm init phase upload-certs --upload-certs
       register: certificate_key
@@ -403,7 +400,7 @@
       delegate_to: "{{ groups['k8proxy'][0] }}"
       delegate_facts: true
       ansible.builtin.gather_facts:
-      when: joined_to_cluster_test.changed  # noqa: no-handler
+      when: joined_to_cluster_test.changed # noqa: no-handler
 
     - name: Set Load Balancer to all nodes
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -417,7 +414,7 @@
       vars:
         kube_control_nodes: "{{ groups['k8cdrs'] }}"
       notify: Restart HAProxy
-      when: joined_to_cluster_test.changed  # noqa: no-handler
+      when: joined_to_cluster_test.changed # noqa: no-handler
 
 - name: Join Worker Nodes
   hosts: k8wkrs
@@ -480,6 +477,8 @@
     - pod_deploy
     - weave_cni
   become: true
+  vars:
+    kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
   tasks:
     - name: Configure UFW 6783/TCP for weave CNI
       community.general.ufw:
@@ -495,14 +494,21 @@
         protocol: udp
         comment: Allow 6783:6784/UDP for weave CNI
 
+    - name: Allow Kube Service Fabric
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ kube_network_real }}"
+        to_ip: "{{ kube_network_real }}"
+        comment: Allow {{ kube_network_real }} for the KUBE Service Network
+
 - name: Deploy Baseline Pods
   hosts: localhost
   tags:
     - pod_deploy
   vars:
-    metallb_address_pool_real:
-      "{{ metallb_address_pool | default('172.25.0.10/32') }}"
+    metallb_address_pool_real: "{{ metallb_address_pool | default('172.25.0.10/32') }}"
     traefik_address_real: "{{ traefik_address | default('172.25.0.10') }}"
+    kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
   tasks:
     - name: Install the Latest Weave Version
       tags:
@@ -512,13 +518,43 @@
           ansible.builtin.uri:
             url: https://api.github.com/repos/weaveworks/weave/releases/latest
           register: weave_version
+
+        - name: Get Weave file
+          ansible.builtin.uri:
+            url: >-
+              https://github.com/weaveworks/weave/releases/download/{{- weave_version.json.tag_name -}}/weave-daemonset-k8s.yaml
+            return_content: true
+          register: weave_config_raw
+
+        - name: Parase weave_config and Assemble new Weave Env
+          ansible.builtin.set_fact:
+            weave_config: "{{ weave_config_raw.content | from_yaml }}"
+            weave_network_env:
+              name: IPALLOC_RANGE
+              value: "{{ kube_network_real }}"
+
+        - name: Update weave_config
+          ansible.builtin.set_fact:
+            weave_config_updated: >-
+              {%- for k8s_item in weave_config["items"] -%}
+                {%- if k8s_item.kind == "DaemonSet" -%}
+                  {%- for container in k8s_item.spec.template.spec.containers -%}
+                    {{- container.__setitem__("env", []) if not container.env-}}
+                    {{- container.env.append(weave_network_env) -}}
+                  {%- endfor -%}
+                  {%- for container in k8s_item.spec.template.spec.initContainers -%}
+                    {{- container.__setitem__("env", []) if not container.env-}}
+                    {{- container.env.append(weave_network_env) -}}
+                  {%- endfor -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {{ weave_config }}
+
         - name: Setup Weave CNI networking
           kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
             state: present
-            src: >
-              https://github.com/weaveworks/weave/releases/download/
-              {{- weave_version.json.tag_name -}}/weave-daemonset-k8s.yaml
+            definition: "{{ weave_config_updated }}"
 
     - name: Install the K8s Dashboard
       tags:
@@ -526,8 +562,7 @@
       block:
         - name: Get Latest k8s Dashboard
           ansible.builtin.uri:
-            url:
-              https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
+            url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
           register: dashboard_version_info
         - name: Compute version
           ansible.builtin.set_fact:
@@ -543,7 +578,7 @@
               {%- endfor -%}
         - name: Deploy K8s Dashboard
           kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
             state: present
             src: >
               https://raw.githubusercontent.com/kubernetes/dashboard/
@@ -566,11 +601,12 @@
                 kind: configmap
                 namespace: kube-system
                 name: kube-proxy
-
               register: k8s_kube_proxy_raw
+
             - name: Parse Config Data
               ansible.builtin.set_fact:
                 k8s_kube_prox_data_parsed: "{{ k8s_kube_proxy_raw.resources[0].data['config.conf'] | replace('\"', '') | from_yaml }}"
+
             - name: Update Config Data
               ansible.builtin.set_fact:
                 k8s_kube_prox_data: "{{ k8s_kube_prox_data_parsed | combine({'ipvs': {'strictARP': false}}, recursive=True) }}"
@@ -593,14 +629,13 @@
 
         - name: Deploy K8s MetalLB
           kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf  # noqa: jinja
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
             state: present
             src: >-
               https://raw.githubusercontent.com/metallb/metallb/
               {{- metallb_version_info.json.tag_name -}}/config/{{- '' -}}
               manifests/metallb-native.yaml
-          register:
-            metal_deployed
+          register: metal_deployed
 
         - name: Wait for metal to startup # noqa: no-handler
           when: metal_deployed.changed
