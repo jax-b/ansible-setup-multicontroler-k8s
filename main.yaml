@@ -605,7 +605,7 @@
         - name: Wait for metal to startup # noqa: no-handler
           when: metal_deployed.changed
           ansible.builtin.wait_for:
-            delay: 60
+            timeout: 60
 
         - name: Install Pod Networking Addresses
           kubernetes.core.k8s:
