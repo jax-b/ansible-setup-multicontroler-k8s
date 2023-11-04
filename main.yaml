@@ -679,6 +679,7 @@
             repo_name: traefik
             repo_state: present
             repo_url: https://traefik.github.io/charts
+
         - name: Install the Traefik Ingest controller
           kubernetes.core.helm:
             kubeconfig: /share/k8s/admin.conf
@@ -687,6 +688,14 @@
             state: present
             release_namespace: traefik
             create_namespace: true
+            values:
+              ports:
+                minecraft:
+                  port: 25565
+                  expose: true
+                  exposedPort: 25565
+                  protocol: TCP
+
         - name: Set Traefik LB IP
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
