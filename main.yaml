@@ -666,7 +666,7 @@
             namespace: metallb-system
             definition:
               spec:
-                IPAddressPool: servernet-k8s-address-pool
+                ipAddressPools: servernet-k8s-address-pool
 
         - name: Install Pod BGP config
           kubernetes.core.k8s:
@@ -678,7 +678,7 @@
             namespace: metallb-system
             definition:
               spec:
-                IPAddressPool: servernet-k8s-address-pool
+                ipAddressPools: servernet-k8s-address-pool
 
     - name: Install the Traefik Ingest controller
       tags:
