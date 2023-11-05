@@ -695,6 +695,7 @@
             repo_name: traefik
             repo_state: present
             repo_url: https://traefik.github.io/charts
+
         - name: Install the Traefik Ingest controller
           kubernetes.core.helm:
             kubeconfig: /share/k8s/admin.conf
@@ -703,6 +704,24 @@
             state: present
             release_namespace: traefik
             create_namespace: true
+            values:
+              ports:
+                dns-udp:
+                  expose: true
+                  port: 9053
+                  exposedPort: 53
+                  protocol: UDP
+                dns-tcp:
+                  expose: true
+                  port: 9053
+                  exposedPort: 53
+                  protocol: UDP
+                sdns:
+                  expose: true
+                  port: 8853
+                  exposedPort: 853
+                  protocol: TCP
+
         - name: Set Traefik LB IP
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
@@ -727,10 +746,11 @@
     - name: Expose Traefik ports
       community.general.ufw:
         rule: allow
-        name: "{{ item }}"
+        port: "{{ item }}"
         to_ip: "{{ traefik_address_real }}"
         comment: Allow {{ item }} for Traefik
-        delete: true
       with_items:
-        - http
-        - https
+        - 80
+        - 443
+        - 53
+        - 853
