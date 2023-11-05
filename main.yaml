@@ -657,6 +657,9 @@
                 autoAssign: true
 
         - name: Install Pod L2 config
+          tags:
+            - never
+            - metal-l2_advertise
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
             state: present
@@ -666,7 +669,8 @@
             namespace: metallb-system
             definition:
               spec:
-                ipAddressPools: servernet-k8s-address-pool
+                ipAddressPools:
+                  - servernet-k8s-address-pool
 
         - name: Install Pod BGP config
           kubernetes.core.k8s:
@@ -678,7 +682,8 @@
             namespace: metallb-system
             definition:
               spec:
-                ipAddressPools: servernet-k8s-address-pool
+                ipAddressPools:
+                  - servernet-k8s-address-pool
 
     - name: Install the Traefik Ingest controller
       tags:
