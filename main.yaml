@@ -656,6 +656,18 @@
                 addresses: "{{ metallb_address_pool_real }}"
                 autoAssign: true
 
+        - name: Install Pod L2 config
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            api_version: metallb.io/v1beta1
+            kind: L2Advertisement
+            name: servernet-k8s-l2-advertisment
+            namespace: metallb-system
+            definition:
+              spec:
+                IPAddressPool: servernet-k8s-address-pool
+
         - name: Install Pod BGP config
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf
