@@ -3,7 +3,7 @@
   hosts: k8proxy
   become: true
   vars:
-    conductor_plane_group: k8cdrs
+    conductor_plane_group: kube_control_plane
     kube_control_nodes: "{{ hostvars[inventory_hostname]['groups'][conductor_plane_group] }}"
   handlers:
     - name: Restart HAProxy
@@ -12,7 +12,6 @@
         state: restarted
         enabled: true
         daemon_reload: true
-
   tasks:
     - name: Install haproxy
       ansible.builtin.apt:
@@ -70,13 +69,62 @@
       with_items:
         - 6443
 
+    - name: Set Load Balancer to first node
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        kube_control_nodes:
+          - "{{ groups['kube_control_plane'][0] }}"
+      when: not kube_config.stat.exists and groups['k8proxy'][0]
+      notify: Restart HAProxy
+
+    - name: Slurp Proxy Certs
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.slurp:
+        src: /etc/ssl/certs/kube_certs.crt
+      register: proxy_cert
+      changed_when: false
+
+    - name: Slurp Proxy key
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.slurp:
+        src: /etc/ssl/private/kube_certs.key
+      register: proxy_key
+      changed_when: false
+
+    - name: Write Proxy Cert
+      ansible.builtin.copy:
+        content: "{{ proxy_cert.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.crt
+        owner: kube
+        group: docker
+        mode: "0444"
+
+    - name: Write Proxy key
+      ansible.builtin.copy:
+        content: "{{ proxy_key.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.key
+        owner: kube
+        group: docker
+        mode: "0440"
+
 - name: Install Kubernetes
   hosts:
-    - k8cdrs
-    - k8wkrs
+    - kube_control_plane
+    - kube_node
   tags:
     - install_k8s
   become: true
+  module_defaults:
+    k8s_minor_version: v1.32
+    k8s_repo: "https://pkgs.k8s.io"
+    k8s_signing_key_location: "/core:/stable:/{{ k8s_minor_version }}/deb/Release.key"
+    docker_repo: "https://download.docker.com"
   handlers:
     - name: Enable noswap service
       ansible.builtin.systemd:
@@ -144,22 +192,22 @@
 
     - name: Add docker gpg key
       ansible.builtin.apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
+        url: "{{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }}/gpg"
         state: present
 
     - name: Add Kubernetes apt key
       ansible.builtin.apt_key:
-        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        url: "{{ k8s_repo }}{{ k8s_signing_key_location }}"
 
     - name: Add docker repository
       ansible.builtin.apt_repository:
         repo: |-
-          deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+          deb [arch=amd64] {{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }} {{ ansible_lsb.codename.lower() }} stable
         state: present
 
     - name: Add Kubernetes repository
       ansible.builtin.apt_repository:
-        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        repo: deb {{ k8s_repo }}/core:/stable:/{{ k8s_minor_version }}/deb/
         state: present
 
     - name: Write noswap systemd service config file
@@ -204,50 +252,56 @@
       notify: Restart Containerd
 
 - name: Open Firewall on the control plane
-  hosts: k8cdrs
+  hosts: kube_control_plane
   become: true
   tasks:
     - name: Open Control Plane Ports
       community.general.ufw:
         rule: allow
-        port: "{{ item }}"
+        port: "{{ item.port }}"
         protocol: tcp
-        comment: Allow {{ item }} kubeadm
+        comment: "Allow {{ item }}/TCP {{ item.service }}"
       with_items:
-        - 6443
-        - 10250
-        - 10259
-        - 10257
-        - 2379
-        - 2380
-        - 2381
+        - port: 6443
+          service: K8s API
+        - port: 10250
+          service: Kublet API
+        - port: 10259
+          service: kube controller manager
+        - port: 10257
+          service: kube scheduler
+        - port: 2379
+          service: etcd client port
+        - port: 2380
+          service: etcd peer port
+        - port: 2381
+          service: etcd monitoring port
 
 - name: Open Firewall on the worker nodes
-  hosts: k8wkrs
+  hosts: kube_node
   become: true
   tasks:
     - name: Open Worker node Plane Kublet Port
       community.general.ufw:
         rule: allow
-        port: "10250"
+        port: "{{ item.port }}"
         protocol: tcp
-        comment: Allow 10250 Kublet Port
-    - name: Open Worker node Plane NodePort Services
-      community.general.ufw:
-        rule: allow
-        port: 30000:32767
-        protocol: tcp
-        comment: Allow 30000:32767 NodePort Services
+        comment: "Allow {{ item }}/TCP {{ item.service }}"
+      with_items:
+        - port: 10250
+          service: Kublet API
+        - port: "30000:32767"
+          service: NodePort Services
 
 - name: Initialize the first Control Plane
   tags:
     - control_init
   become: true
-  hosts: k8cdrs[0]
+  hosts: kube_control_plane[0]
   strategy: linear
   vars:
-    kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
-    kube_service_network_real: "{{ kube_service_network | default('10.96.0.0/16') }}"
+    kube_network_real: "{{ kube_network | default('172.30.0.0/17') }}"
+    kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -262,11 +316,25 @@
         path: /etc/kubernetes/admin.conf
       register: kube_config
 
-    - name: Gather proxy facts
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      delegate_facts: true
-      ansible.builtin.gather_facts:
-      when: not kube_config.stat.exists
+    - name: Write Proxy Cert
+      ansible.builtin.copy:
+        content: "{{ proxy_cert.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.crt
+        owner: kube
+        group: docker
+        mode: "0444"
+      when:
+        proxy_cert
+
+    - name: Write Proxy key
+      ansible.builtin.copy:
+        content: "{{ proxy_key.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.key
+        owner: kube
+        group: docker
+        mode: "0440"
+      when:
+        proxy_key
 
     - name: Set Load Balancer to first node
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -278,39 +346,9 @@
         mode: "0644"
       vars:
         kube_control_nodes:
-          - "{{ groups['k8cdrs'][0] }}"
-      when: not kube_config.stat.exists
+          - "{{ groups['kube_control_plane'][0] }}"
+      when: not kube_config.stat.exists and groups['k8proxy'][0]
       notify: Restart HAProxy
-
-    - name: Slurp Proxy Certs
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      ansible.builtin.slurp:
-        src: /etc/ssl/certs/kube_certs.crt
-      register: proxy_cert
-      changed_when: false
-
-    - name: Slurp Proxy key
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      ansible.builtin.slurp:
-        src: /etc/ssl/private/kube_certs.key
-      register: proxy_key
-      changed_when: false
-
-    - name: Write Proxy Cert
-      ansible.builtin.copy:
-        content: "{{ proxy_cert.content | b64decode }}"
-        dest: /etc/kubernetes/pki/front-proxy-ca.crt
-        owner: kube
-        group: docker
-        mode: "0444"
-
-    - name: Write Proxy key
-      ansible.builtin.copy:
-        content: "{{ proxy_key.content | b64decode }}"
-        dest: /etc/kubernetes/pki/front-proxy-ca.key
-        owner: kube
-        group: docker
-        mode: "0440"
 
     - name: Flush Handlers
       ansible.builtin.meta: flush_handlers
@@ -336,7 +374,7 @@
       changed_when: '"Your Kubernetes control-plane" " has initialized successfully!" in adm_output.stdout'
 
 - name: Join Other Control Nodes
-  hosts: k8cdrs[1:]
+  hosts: kube_control_plane[1:]
   strategy: linear
   tags:
     - control_init
@@ -351,7 +389,7 @@
         enabled: true
         daemon_reload: true
     - name: Get certificate key
-      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
       run_once: true # noqa: run-once
       ansible.builtin.command:
         cmd: sudo kubeadm init phase upload-certs --upload-certs
@@ -374,7 +412,7 @@
       ansible.builtin.meta: flush_handlers
 
     - name: Get Join Command
-      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
       become: true
       ansible.builtin.command:
         cmd: |-
@@ -412,14 +450,14 @@
         group: root
         mode: "0644"
       vars:
-        kube_control_nodes: "{{ groups['k8cdrs'] }}"
+        kube_control_nodes: "{{ groups['kube_control_plane'] }}"
       notify: Restart HAProxy
       when: joined_to_cluster_test.changed # noqa: no-handler
 
 - name: Join Worker Nodes
-  hosts: k8wkrs
+  hosts: kube_node
   vars:
-    kube_service_network_real: "{{ kube_network | default('10.96.0.0/16') }}"
+    kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
   tasks:
     - name: Check if node needs join
       ansible.builtin.stat:
@@ -428,7 +466,7 @@
       changed_when: false
 
     - name: Get Join Command
-      delegate_to: "{{ groups['k8cdrs'][0] }}"
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
       become: true
       ansible.builtin.command:
         cmd: |-
@@ -456,7 +494,7 @@
         from_ip: "{{ kube_service_network_real }}"
 
 - name: Copy ADM Config
-  hosts: k8cdrs[0]
+  hosts: kube_control_plane[0]
   tasks:
     - name: Copy K8s Admin Config to /Share/k8s
       become: true
@@ -469,38 +507,98 @@
         group: Ansible
         flat: true
 
-- name: Open Weave Ports
+- name: Open CNI Ports
   hosts:
-    - k8cdrs
-    - k8wkrs
+    - kube_control_plane
+    - kube_node
   tags:
     - pod_deploy
-    - weave_cni
+    - kube_cni
   become: true
   vars:
     kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
+    kube_network_cni_real: "{{ kube_network_cni | default('calico') }}"
+  handlers:
+    - name: Restart UFW
+      community.general.ufw:
+        state: restarted
   tasks:
-    - name: Configure UFW 6783/TCP for weave CNI
-      community.general.ufw:
-        rule: allow
-        port: 6783
-        protocol: tcp
-        comment: Allow 6783/TCP for weave CNI
+    - name: Weave Ports
+      tags:
+        - weave_cni
+      when: 
+        kube_network_cni_real == "weave"
+      block:
+        - name: Configure UFW 6783/TCP for weave CNI
+          community.general.ufw:
+            rule: allow
+            port: 6783
+            protocol: tcp
+            comment: Allow 6783/TCP for weave CNI
 
-    - name: Configure UFW services 6783:6784 for weave CNI
-      community.general.ufw:
-        rule: allow
-        port: 6783:6784
-        protocol: udp
-        comment: Allow 6783:6784/UDP for weave CNI
+        - name: Configure UFW services 6783:6784 for weave CNI
+          community.general.ufw:
+            rule: allow
+            port: 6783:6784
+            protocol: udp
+            comment: Allow 6783:6784/UDP for weave CNI
 
-    - name: Allow Kube Service Fabric
-      community.general.ufw:
-        rule: allow
-        from_ip: "{{ kube_network_real }}"
-        to_ip: "{{ kube_network_real }}"
-        comment: Allow {{ kube_network_real }} for the KUBE Service Network
-
+        - name: Allow Kube Service Fabric
+          community.general.ufw:
+            rule: allow
+            from_ip: "{{ kube_network_real }}"
+            to_ip: "{{ kube_network_real }}"
+            comment: Allow {{ kube_network_real }} for the KUBE Service Network
+    - name: Calico ports
+      tags:
+        - calico_cni
+      when:
+        kube_network_cni_real = "calico"
+      block:
+        - name: Configure UFW 179/TCP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 179
+            protocol: tcp
+            comment: Allow 179/TCP (BGP) for Calico CNI
+        - name: Configure UFW 4789/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 4789
+            protocol: udp
+            comment: Allow 4789/UDP (VXLAN) for Calico CNI
+        - name: Configure UFW 5473/TCP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 5473
+            protocol: tcp
+            comment: Allow 5473/TCP (Typha) for Calico CNI
+        - name: Configure UFW 51821/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 51821
+            protocol: udp
+            comment: Allow 51821/UDP (IPv6 Wireguard) for Calico CNI
+        - name: Configure UFW 51820/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 51820
+            protocol: udp
+            comment: Allow 51820/UDP (IPv4 Wireguard) for Calico CNI
+        - name: Configure IP Forwarding
+          ansible.builtin.lineinfile:
+            line: DEFAULT_FORWARD_POLICY="ACCEPT"
+            path: /etc/default/ufw
+            regexp: "^DEFAULT_FORWARD_POLICY="
+          notify: Restart UFW
+        - name: Allow Kube Service Fabric
+          community.general.ufw:
+            rule: allow
+            from_ip: "{{ kube_network_real }}"
+            to_ip: "{{ kube_network_real }}"
+            comment: Allow {{ kube_network_real }} for the KUBE Service Network
+        
+      
 - name: Deploy Baseline Pods
   hosts: localhost
   tags:
@@ -509,10 +607,15 @@
     metallb_address_pool_real: "{{ metallb_address_pool | default('172.25.0.10/32') }}"
     traefik_address_real: "{{ traefik_address | default('172.25.0.10') }}"
     kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
+    kube_network_cni_real: "{{ kube_network_cni | default('calico') }}"
+    ingress_controller_real: "{{ ingress_controller | default('traefik') }}"
   tasks:
     - name: Install the Latest Weave Version
       tags:
         - weave_cni
+        - kube_cni
+      when:
+        kube_network_cni_real == "weave"
       block:
         - name: Get Weave Latest Version Info
           ansible.builtin.uri:
@@ -555,6 +658,63 @@
             kubeconfig: /share/k8s/admin.conf # noqa: jinja
             state: present
             definition: "{{ weave_config_updated }}"
+
+    - name: Install the Latest Calico Version
+      tags:
+        - calico_cni
+        - kube_cni
+      when:
+        kube_network_cni_real == "calico"
+      block:
+        - name: Get Calico Latest Version Info
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/projectcalico/calico/releases/latest
+          register: calico_version
+
+        - name: Get Calico operator and custom resource definitions
+          ansible.builtin.uri:
+            url: >-
+              https://raw.github.com/projectcalico/calico/{{- calico_version.json.tag_name -}}/manifests/tigera-operator.yaml
+            return_content: true
+          register: calico_operator_raw
+
+        - name: Parase calico
+          ansible.builtin.set_fact:
+            calico_operator: "{{ calico_operator_raw.content | from_yaml }}"
+
+        - name: Install Resouce definitions
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition: {{ calico_operator }}
+        
+        - name: Setup Calico Networking
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition:
+              api_version: "operator.tigera.io/v1"
+              kind: "Installation"
+              metadata:
+                name: default
+              spec:
+                ipAddressPools:
+                  - name: default-ipv4-ippool
+                    blockSize: 26
+                    cidr: kube_network_real
+                    encapsulation: "VXLANCrossSubnet"
+                    natOutgoing: "Enabled"
+                    nodeSelector: all()
+        - name: Configure the Calcio API Server
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition:
+              api_version: "operator.tigera.io/v1"
+              kind: "APIServer"
+              metadata:
+                name: default
+              spec: {}
 
     - name: Install the K8s Dashboard
       tags:
@@ -688,6 +848,7 @@
     - name: Install the Traefik Ingest controller
       tags:
         - traefik_ingest
+      when: ingress_controller_real == "traefik" 
       block:
         - name: Install the Traefik Helm repo
           kubernetes.core.helm_repository:
@@ -735,7 +896,7 @@
                   metallb.universe.tf/loadBalancerIPs: "{{ traefik_address_real }}"
 
 - name: Open Traefik Ports on Worker Nodes
-  hosts: k8wkrs
+  hosts: kube_node
   tags:
     - pod_deploy
     - traefik_ingest
