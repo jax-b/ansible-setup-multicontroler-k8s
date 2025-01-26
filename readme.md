@@ -27,7 +27,7 @@ The Kube and Traefik dashboards can be setup on your own terms to be exposed but
 There is a small amount of configurable to this see table
   - Custom Pod Network CIDR via the variable `kube_network`
   - Custom Service Network CIDR via the variable `kube_service_network`
-  - Skip Install of the Weave CNI via `--skip-tags weave_cni`
+  - Skip Install of the Calico CNI via `--skip-tags calico_cni`
   - Skip Install of the K8s Dashboard via `--skip-tags k8s_dashboard`
   - Skip Install of the MetalLB Network LB via `--skip-tags metallb`
   - Skip Install of the Traefik Ingest Controller via `--skip-tags traefik_ingest`
@@ -36,13 +36,13 @@ There is a small amount of configurable to this see table
 #### Required Host Groups
 This playbook requires 3 different host groups to be set up:
  -  k8proxy
- -  k8cdrs (2-7)
- -  k8wkrs (0-X)
+ -  kube_control_plane (1-7)
+ -  kube_node (0-X)
 
 #### My Setup
 I am personally running:
 |   type  | qty |
 | ------- |-----|
 | k8proxy | 1   |
-| k8cdrs  | 3   |
-| k8wkrs  | 3   |
+| kube_control_plane  | 3   |
+| kube_node  | 4   |

@@ -374,7 +374,7 @@
       changed_when: '"Your Kubernetes control-plane" " has initialized successfully!" in adm_output.stdout'
 
 - name: Join Other Control Nodes
-  hosts: kube_control_plane[1:]
+  hosts: kube_control_plane
   strategy: linear
   tags:
     - control_init
