@@ -304,10 +304,11 @@
         backrefs: true
       notify: Restart Containerd
 
-
 - name: Open Firewall on the control plane
   hosts: kube_control_plane
   become: true
+  tags:
+    - install_k8s
   tasks:
     - name: Open Control Plane Ports
       community.general.ufw:
@@ -334,6 +335,8 @@
 - name: Open Firewall on the worker nodes
   hosts: kube_node
   become: true
+  tags:
+    - install_k8s
   tasks:
     - name: Open Worker node Plane Kublet Port
       community.general.ufw:
@@ -511,6 +514,8 @@
 
 - name: Join Worker Nodes
   hosts: kube_node
+  tags:
+    - node_init
   vars:
     kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
   tasks:
@@ -550,17 +555,33 @@
 
 - name: Copy ADM Config
   hosts: kube_control_plane[0]
+  tags:
+    - pod_deploy
+    - admin_config
+  become: true
   tasks:
-    - name: Copy K8s Admin Config to /Share/k8s
-      become: true
-      ansible.builtin.fetch:
-        remote_src: true
+    - name: Ensure Destination Directory Exists
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: /share/k8s
+        state: directory
+        mode: "0770"
+        owner: ansible
+        group: ansible
+
+    - name: Copy K8s Admin Config to /share/k8s
+      ansible.builtin.slurp:
         src: /etc/kubernetes/admin.conf
+      register: k8s_admin_config
+
+    - name: Write K8s Admin Config to /share/k8s
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ k8s_admin_config.content | b64decode }}"
         dest: /share/k8s/admin.conf
         mode: "0440"
-        owner: Ansible
-        group: Ansible
-        flat: true
+        owner: ansible
+        group: ansible
 
 - name: Open CNI Ports
   hosts:
@@ -609,7 +630,7 @@
       tags:
         - calico_cni
       when:
-        kube_network_cni_real = "calico"
+        kube_network_cni_real == "calico"
       block:
         - name: Configure UFW 179/TCP for Calico CNI
           community.general.ufw:
