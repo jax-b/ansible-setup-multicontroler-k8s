@@ -80,7 +80,7 @@
       vars:
         kube_control_nodes:
           - "{{ groups['kube_control_plane'][0] }}"
-      when: not kube_config.stat.exists and groups['k8proxy'][0]
+      when: not kube_config.stat.exists and 'k8proxy' in groups
       notify: Restart HAProxy
 
     - name: Slurp Proxy Certs
@@ -120,18 +120,19 @@
   tags:
     - install_k8s
   become: true
-  module_defaults:
+  vars:
     k8s_minor_version: v1.32
     k8s_repo: "https://pkgs.k8s.io"
     k8s_signing_key_location: "/core:/stable:/{{ k8s_minor_version }}/deb/Release.key"
     docker_repo: "https://download.docker.com"
   handlers:
-    - name: Enable noswap service
+    - name: Reload SystemD
       ansible.builtin.systemd:
-        name: noswap
-        state: started
-        enabled: true
         daemon_reload: true
+
+    - name: Apply sysctl config
+      ansible.posix.sysctl:
+        reload: true
 
     - name: Restart Containerd
       ansible.builtin.systemd:
@@ -189,6 +190,7 @@
         - net.bridge.bridge-nf-call-iptables
         - net.ipv4.ip_forward
         - net.bridge.bridge-nf-call-ip6tables
+      notify: Apply sysctl config
 
     - name: Add docker gpg key
       ansible.builtin.apt_key:
@@ -207,7 +209,7 @@
 
     - name: Add Kubernetes repository
       ansible.builtin.apt_repository:
-        repo: deb {{ k8s_repo }}/core:/stable:/{{ k8s_minor_version }}/deb/
+        repo: deb {{ k8s_repo }}/core:/stable:/{{ k8s_minor_version }}/deb/ /
         state: present
 
     - name: Write noswap systemd service config file
@@ -217,13 +219,20 @@
         owner: root
         group: root
         mode: "0644"
-      notify: Enable noswap service
 
-    - name: Install docker and kube packages
+    - name: Enable noswap service
+      ansible.builtin.systemd:
+        name: noswap
+        state: started
+        enabled: true
+      notify: Reload SystemD
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Install kube packages
       ansible.builtin.apt:
         name:
-          - docker-ce
-          - docker-ce-cli
           - containerd.io
           - kubelet
           - kubecolor
@@ -232,24 +241,69 @@
           - apt-transport-https
         state: present
 
-    - name: Enable docker and kube
+    - name: Enable kube services
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: started
         enabled: true
       with_items:
-        - docker
         - kubelet
         - containerd
 
-    - name: Copy containerd config
+    # - name: Copy containerd config
+    #   ansible.builtin.file:
+    #     src: containerd.toml
+    #     dest: /etc/containerd/config.toml
+    #     mode: "0644"
+    #     owner: root
+    #     group: root
+    # - name: Remove Containerd config
+    #   ansible.builtin.file:
+    #     state: absent
+    #     path: /etc/containerd/config.toml
+    #   notify: Restart Containerd
+
+    - name: Check if containerd config exists
+      ansible.builtin.stat:
+        path: /etc/containerd/config.toml
+      register: containerd_config_file
+
+    - name: Load containerd defaults
+      ansible.builtin.command:
+        cmd: containerd config default
+      register: containerd_config
+      changed_when: false
+      when: not containerd_config_file.stat.exists
+
+    - name: Save containerd config
       ansible.builtin.copy:
-        src: containerd.toml
+        content: "{{ containerd_config.stdout }}"
         dest: /etc/containerd/config.toml
         mode: "0644"
         owner: root
         group: root
+      when: not containerd_config_file.stat.exists
+
+    - name: Ensure SystemD Cgroup is set to true
+      ansible.builtin.lineinfile:
+        line: '\g<1>SystemdCgroup = true'
+        regexp: "( +)SystemdCgroup = .+"
+        insertafter: "[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc.options]"
+        path: /etc/containerd/config.toml
+        backrefs: true
+        state: present
       notify: Restart Containerd
+
+    - name: Ensure containerd snapshotter is set to overlayfs
+      ansible.builtin.lineinfile:
+        line: '\g<1>snapshotter = "overlayfs"'
+        regexp: "( +)snapshotter = .+"
+        insertafter: "[plugins.\"io.containerd.grpc.v1.cri\".containerd]"
+        path: /etc/containerd/config.toml
+        state: present
+        backrefs: true
+      notify: Restart Containerd
+
 
 - name: Open Firewall on the control plane
   hosts: kube_control_plane
@@ -260,7 +314,7 @@
         rule: allow
         port: "{{ item.port }}"
         protocol: tcp
-        comment: "Allow {{ item }}/TCP {{ item.service }}"
+        comment: "Allow {{ item.port }}/TCP {{ item.service }}"
       with_items:
         - port: 6443
           service: K8s API
@@ -286,7 +340,7 @@
         rule: allow
         port: "{{ item.port }}"
         protocol: tcp
-        comment: "Allow {{ item }}/TCP {{ item.service }}"
+        comment: "Allow {{ item.port }}/TCP {{ item.service }}"
       with_items:
         - port: 10250
           service: Kublet API
@@ -302,6 +356,7 @@
   vars:
     kube_network_real: "{{ kube_network | default('172.30.0.0/17') }}"
     kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
+    k8s_proxy_name_real: "{{ k8s_proxy_name | default('k8s-api.internal') }}"
   handlers:
     - name: Restart HAProxy
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -324,7 +379,7 @@
         group: docker
         mode: "0444"
       when:
-        proxy_cert
+        proxy_cert | default(false)
 
     - name: Write Proxy key
       ansible.builtin.copy:
@@ -334,7 +389,7 @@
         group: docker
         mode: "0440"
       when:
-        proxy_key
+        proxy_key | default(false)
 
     - name: Set Load Balancer to first node
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -347,7 +402,7 @@
       vars:
         kube_control_nodes:
           - "{{ groups['kube_control_plane'][0] }}"
-      when: not kube_config.stat.exists and groups['k8proxy'][0]
+      when: not kube_config.stat.exists and 'k8proxy' in groups
       notify: Restart HAProxy
 
     - name: Flush Handlers
@@ -363,11 +418,10 @@
       ansible.builtin.command:
         cmd: |-
           kubeadm init
-          --control-plane-endpoint "{{ groups["k8proxy"][0] }}:6443"
+          --control-plane-endpoint "{{ k8s_proxy_name_real  }}:6443"
           --upload-certs
           --pod-network-cidr "{{ kube_network_real }}"
           --service-cidr "{{ kube_service_network_real }}"
-          --feature-gates="PublicKeysECDSA=true"
         creates: /etc/kubernetes/admin.conf
       register: adm_output
       when: not kube_config.stat.exists
@@ -388,6 +442,7 @@
         state: restarted
         enabled: true
         daemon_reload: true
+
     - name: Get certificate key
       delegate_to: "{{ groups['kube_control_plane'][0] }}"
       run_once: true # noqa: run-once
@@ -438,7 +493,7 @@
       delegate_to: "{{ groups['k8proxy'][0] }}"
       delegate_facts: true
       ansible.builtin.gather_facts:
-      when: joined_to_cluster_test.changed # noqa: no-handler
+      when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
 
     - name: Set Load Balancer to all nodes
       delegate_to: "{{ groups['k8proxy'][0] }}"
@@ -452,7 +507,7 @@
       vars:
         kube_control_nodes: "{{ groups['kube_control_plane'] }}"
       notify: Restart HAProxy
-      when: joined_to_cluster_test.changed # noqa: no-handler
+      when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
 
 - name: Join Worker Nodes
   hosts: kube_node
@@ -520,7 +575,8 @@
     kube_network_cni_real: "{{ kube_network_cni | default('calico') }}"
   handlers:
     - name: Restart UFW
-      community.general.ufw:
+      ansible.builtin.service:
+        name: ufw
         state: restarted
   tasks:
     - name: Weave Ports
@@ -597,8 +653,7 @@
             from_ip: "{{ kube_network_real }}"
             to_ip: "{{ kube_network_real }}"
             comment: Allow {{ kube_network_real }} for the KUBE Service Network
-        
-      
+
 - name: Deploy Baseline Pods
   hosts: localhost
   tags:
@@ -686,8 +741,8 @@
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf # noqa: jinja
             state: present
-            definition: {{ calico_operator }}
-        
+            definition: "{{ calico_operator }}"
+
         - name: Setup Calico Networking
           kubernetes.core.k8s:
             kubeconfig: /share/k8s/admin.conf # noqa: jinja

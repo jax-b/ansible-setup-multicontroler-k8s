@@ -1,10 +1,10 @@
 ---
 - name: Teadown K8S
   hosts:
-    - k8cdrs
-    - k8wkrs
+    - kube_control_plane
+    - kube_node
   become: true
-  strategy: free # noqa: run-once[play]
+  # strategy: free # noqa: run-once[play]
   tasks:
     - name: User Consent
       ansible.builtin.pause:
