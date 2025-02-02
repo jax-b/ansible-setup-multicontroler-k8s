@@ -12,9 +12,11 @@ router bgp 65002
  neighbor metal-lb remote-as 65001
  {% for host_number in range(kube_control_nodes|length) %}
  neighbor {{ kube_control_nodes[host_number].ansible_host }} peer-group metal-lb
+ neighbor {{ kube_control_nodes[host_number].ansible_host }} bfd
  {% endfor %}
  {% for host_number in range(kube_worker_nodes|length) %}
  neighbor {{ kube_worker_nodes[host_number].ansible_host }} peer-group metal-lb
+ neighbor {{ kube_worker_nodes[host_number].ansible_host }} bfd
  {% endfor %}
 
  !
@@ -22,9 +24,11 @@ router bgp 65002
   neighbor metal-lb activate
   {% for host_number in range(kube_control_nodes|length) %}
   neighbor {{ kube_control_nodes[host_number].ansible_host }} next-hop-self
+  neighbor {{ kube_control_nodes[host_number].ansible_host }} activate
   {% endfor %}
   {% for host_number in range(kube_worker_nodes|length) %}
   neighbor {{ kube_worker_nodes[host_number].ansible_host }} next-hop-self
+  neighbor {{ kube_worker_nodes[host_number].ansible_host }} activate
   {% endfor %}
 
   neighbor {{ ipaddress }} 

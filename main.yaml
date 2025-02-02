@@ -124,7 +124,7 @@
             mode: "0440"
 
     - name: Setup BGP FRR for MetalLB
-      when: kube_install_metallb_real and kube_metallb_mode_real == "BGP"
+      when: kube_install_metallb_real and kube_metallb_mode_real == "BGP" or kube_network_cni | default('calico') == "calico" and kube_calico_bgp_peer | default(false)
       block:
         - name: Install FRR
           ansible.builtin.apt:
@@ -634,6 +634,8 @@
   vars:
     kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
     kube_network_cni_real: "{{ kube_network_cni | default('calico') }}"
+    kube_metallb_mode_real: "{{ kube_metallb_mode | default('layer2') }}"
+    kube_install_metallb_real: "{{ kube_install_metallb | default(false) }}"
   handlers:
     - name: Restart UFW
       ansible.builtin.service:
@@ -714,25 +716,40 @@
             to_ip: "{{ kube_network_real }}"
             comment: Allow {{ kube_network_real }} for the KUBE Service Network
 
-    - name: MetalLB Ports
+    - name: BGP Ports
+      when: kube_metallb_mode_real == "BGP" and kube_install_metallb_real or kube_calico_bgp_peer | default(false)
       tags:
         - metallb
       block:
-        - name: Configure UFW 179/TCP for MetalLB
+        - name: Configure UFW 179/TCP for BGP
           community.general.ufw:
             rule: allow
             port: 179
             protocol: tcp
-            comment: Allow 179/TCP (BGP) for MetalLB
-        - name: L2 Mode
+            comment: Allow 179/TCP (BGP) for BGP
+        - name: Configure UFW BFD for BGP
           community.general.ufw:
             rule: allow
-            port: 7946
-            protocol: "{{ item }}"
-            comment: Allow 7946/{{ item }} (L2 Arp) for MetalLB
+            port: "{{ item }}"
+            protocol: udp
+            comment: Allow {{ item }}/UDP (BFD) for BGP
           with_items:
-            - udp
-            - tcp
+            - 3784
+            - 3785
+
+    - name: MetalLB Ports L2
+      tags:
+        - metallb
+      when:
+        kube_metallb_mode_real == "layer2" and kube_install_metallb_real
+      community.general.ufw:
+        rule: allow
+        port: 7946
+        protocol: "{{ item }}"
+        comment: Allow 7946/{{ item }} (L2 Arp) for MetalLB
+      with_items:
+        - udp
+        - tcp
 
 - name: Deploy Baseline Pods
   hosts: localhost
@@ -859,6 +876,24 @@
               metadata:
                 name: default
               spec: {}
+
+        - name: Install ProxyBGP Peer
+          when: kube_calico_bgp_peer | default(false) and 'k8proxy' in groups
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition:
+              apiVersion: projectcalico.org/v3
+              kind: BGPPeer
+              metadata:
+                name: proxy-bgp-peer-{{ item }}
+              spec:
+                peerIP: "{{ hostvars[item].ansible_default_ipv4.address }}"
+                asNumber: 65002
+                nodeSelector: all()
+          with_items:
+            - "{{ groups['k8proxy'] }}"
+
       always:
         - name: Remove temp directory
           ansible.builtin.file:
@@ -936,7 +971,7 @@
               spec:
                 addresses:
                   - "{{ kube_metallb_address_pool_real }}"
-                autoAssign: true
+                autoAssign: false
 
         - name: Install Pod L2 config
           tags:
@@ -970,27 +1005,27 @@
                 ipAddressPools:
                   - default-address-pool
 
-        - name: Install BFD Profile
-          tags:
-            - metal-bgp_advertise
-          when: kube_metallb_mode_real == "bgp"
-          kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf
-            state: present
-            api_version: metallb.io/v1beta1
-            kind: BFDProfile
-            name: default-bfd-profile
-            namespace: metallb-system
-            definition:
-              spec:
-                detectMultiplier: 37
-                echoMode: true
-                minimumTtl: 10
-                passiveMode: true
-                receiveInterval: 35
-                transmitInterval: 35
+        # - name: Install BFD Profile
+        #   tags:
+        #     - metal-bgp_advertise
+        #   when: kube_metallb_mode_real == "bgp"
+        #   kubernetes.core.k8s:
+        #     kubeconfig: /share/k8s/admin.conf
+        #     state: present
+        #     api_version: metallb.io/v1beta1
+        #     kind: BFDProfile
+        #     name: default-bfd-profile
+        #     namespace: metallb-system
+        #     definition:
+        #       spec:
+        #         detectMultiplier: 37
+        #         echoMode: true
+        #         minimumTtl: 10
+        #         passiveMode: true
+        #         receiveInterval: 35
+        #         transmitInterval: 35
 
-        - name: When Kube Proxy is avalibe
+        - name: When Kube Proxy is avalibe setup BGP Peer
           tags:
             - metal-bgp_advertise
           when: kube_metallb_mode_real == "bgp" and 'k8proxy' in groups
@@ -1006,7 +1041,7 @@
                 myASN: 65001
                 peerASN: 65002
                 peerAddress: "{{ hostvars[item].ansible_default_ipv4.address }}"
-                bfdProfile: default-bfd-profile
+                # bfdProfile: default-bfd-profile
           with_items:
             - "{{ groups['k8proxy'] }}"
 
@@ -1078,28 +1113,22 @@
             definition:
               metadata:
                 annotations:
-                  metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
+                  metallb.io/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
 
     - name: Install the Nginx Ingest controller
       tags:
         - nginx_ingest
       when: kube_ingress_controller_real == "nginx"
       block:
-        - name: Install the Nginx Helm repo
-          kubernetes.core.helm_repository:
-            kubeconfig: /share/k8s/admin.conf
-            repo_name: nginx-stable
-            repo_state: present
-            repo_url: https://helm.nginx.com/stable
-
         - name: Install the Nginx Ingest controller
           kubernetes.core.helm:
             kubeconfig: /share/k8s/admin.conf
-            chart_ref: nginx-stable/nginx-ingress
+            chart_ref: oci://ghcr.io/nginx/charts/nginx-ingress
             name: nginx-ingress
             state: present
             release_namespace: nginx-ingress
             create_namespace: true
+            values:
 
         - name: Set Nginx LB IP
           kubernetes.core.k8s:
@@ -1111,31 +1140,5 @@
             definition:
               metadata:
                 annotations:
-                  metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
-
-    - name: Install the K8s Dashboard
-      tags:
-        - k8s_dashboard
-      block:
-        - name: Get Latest k8s Dashboard
-          ansible.builtin.uri:
-            url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
-          register: dashboard_version_info
-        - name: Compute version
-          ansible.builtin.set_fact:
-            dashboard_version: |-
-              {%- set found_version = [false] -%}
-              {%- for item in dashboard_version_info.json -%}
-              {%- if not found_version[0] and not item.draft -%}
-              {%- if not item.prerelease -%}
-              {%- if "-alpha" not in item.name and "-beta" not in item.name -%}
-              {{- item.name -}}
-              {{- found_version.insert(0, true) -}}
-              {%- endif -%}{%- endif -%}{%- endif -%}
-              {%- endfor -%}
-        - name: Deploy K8s Dashboard
-          kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf # noqa: jinja
-            state: present
-            src: >
-              https://raw.githubusercontent.com/kubernetes/dashboard/ {{- dashboard_version -}}/aio/deploy/recommended.yaml
+                  metallb.io/address-pool: default-address-pool
+                  metallb.io/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
