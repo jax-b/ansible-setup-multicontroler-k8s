@@ -9,158 +9,158 @@
     kube_install_metallb_real: "{{ kube_install_metallb | default(false) }}"
     kube_metallb_mode_real: "{{ kube_metallb_mode | default('layer2') }}"
   handlers:
-  - name: Restart FRR
-    ansible.builtin.systemd:
-      name: frr
-      state: restarted
-
-  - name: Restart HAProxy
-    ansible.builtin.systemd:
-      name: haproxy
-      state: restarted
-      enabled: true
-      daemon_reload: true
-  tasks:
-  - name: Setup HAProxy
-    block:
-    - name: Install haproxy
-      ansible.builtin.apt:
-        name: haproxy
-        state: present
-
-    - name: Copy haproxy config
-      ansible.builtin.template:
-        src: haproxy.cfg.j2
-        dest: /etc/haproxy/haproxy.cfg
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Restart HAProxy
-
-    - name: Generate Private Key Certs
-      community.crypto.openssl_privatekey:
-        path: /etc/ssl/private/kube_certs.key
-        mode: "0440"
-        owner: root
-        group: root
-        type: ECC
-        curve: secp521r1
-      notify: Restart HAProxy
-
-    - name: Copy Openssl Config
-      ansible.builtin.template:
-        src: server_openssl.conf.j2
-        dest: /etc/ssl/certs/kube_certs.conf
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Generate Public Key Certs
-      ansible.builtin.command:
-        cmd: |-
-          openssl req
-          -x509
-          -new
-          -sha512
-          -nodes
-          -key /etc/ssl/private/kube_certs.key
-          -config /etc/ssl/certs/kube_certs.conf
-          -days 7307
-          -out /etc/ssl/certs/kube_certs.crt
-        creates: /etc/ssl/certs/kube_certs.crt
-      notify: Restart HAProxy
-
-    - name: Configure UFW services
-      community.general.ufw:
-        rule: allow
-        port: "{{ item }}"
-        protocol: tcp
-        comment: Allow {{ item }} for HAProxy to kubeadm
-      with_items:
-      - 6443
-
-    - name: Set Load Balancer to first node
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      ansible.builtin.template:
-        src: haproxy.cfg.j2
-        dest: /etc/haproxy/haproxy.cfg
-        owner: root
-        group: root
-        mode: "0644"
-      vars:
-        kube_control_nodes:
-        - "{{ groups['kube_control_plane'][0] }}"
-      when: not kube_config.stat.exists and 'k8proxy' in groups
-      notify: Restart HAProxy
-
-    - name: Slurp Proxy Certs
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      ansible.builtin.slurp:
-        src: /etc/ssl/certs/kube_certs.crt
-      register: proxy_cert
-      changed_when: false
-
-    - name: Slurp Proxy key
-      delegate_to: "{{ groups['k8proxy'][0] }}"
-      ansible.builtin.slurp:
-        src: /etc/ssl/private/kube_certs.key
-      register: proxy_key
-      changed_when: false
-
-    - name: Write Proxy Cert
-      ansible.builtin.copy:
-        content: "{{ proxy_cert.content | b64decode }}"
-        dest: /etc/kubernetes/pki/front-proxy-ca.crt
-        owner: kube
-        group: docker
-        mode: "0444"
-
-    - name: Write Proxy key
-      ansible.builtin.copy:
-        content: "{{ proxy_key.content | b64decode }}"
-        dest: /etc/kubernetes/pki/front-proxy-ca.key
-        owner: kube
-        group: docker
-        mode: "0440"
-
-  - name: Setup BGP FRR for MetalLB
-    when: kube_install_metallb_real and kube_metallb_mode_real == "BGP"
-    block:
-    - name: Install FRR
-      ansible.builtin.apt:
-        name: frr frr-pythontools
-        state: present
-
-    - name: Configure UFW services
-      ansible.general.ufw:
-        rule: allow
-        port: "{{ item }}"
-        protocol: tcp
-        comment: Allow {{ item }} for FRR to kubeadm
-      with_items:
-      - 179
-
-    - name: Copy BGP config
-      ansible.builtin.template:
-        src: frr.conf.j2
-        dest: /etc/frr/frr.conf
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Restart FRR
-
-    - name: Enable FRR
+    - name: Restart FRR
       ansible.builtin.systemd:
         name: frr
+        state: restarted
+
+    - name: Restart HAProxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
         enabled: true
-        state: started
+        daemon_reload: true
+  tasks:
+    - name: Setup HAProxy
+      block:
+        - name: Install haproxy
+          ansible.builtin.apt:
+            name: haproxy
+            state: present
+
+        - name: Copy haproxy config
+          ansible.builtin.template:
+            src: haproxy.cfg.j2
+            dest: /etc/haproxy/haproxy.cfg
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Restart HAProxy
+
+        - name: Generate Private Key Certs
+          community.crypto.openssl_privatekey:
+            path: /etc/ssl/private/kube_certs.key
+            mode: "0440"
+            owner: root
+            group: root
+            type: ECC
+            curve: secp521r1
+          notify: Restart HAProxy
+
+        - name: Copy Openssl Config
+          ansible.builtin.template:
+            src: server_openssl.conf.j2
+            dest: /etc/ssl/certs/kube_certs.conf
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Generate Public Key Certs
+          ansible.builtin.command:
+            cmd: |-
+              openssl req
+              -x509
+              -new
+              -sha512
+              -nodes
+              -key /etc/ssl/private/kube_certs.key
+              -config /etc/ssl/certs/kube_certs.conf
+              -days 7307
+              -out /etc/ssl/certs/kube_certs.crt
+            creates: /etc/ssl/certs/kube_certs.crt
+          notify: Restart HAProxy
+
+        - name: Configure UFW services
+          community.general.ufw:
+            rule: allow
+            port: "{{ item }}"
+            protocol: tcp
+            comment: Allow {{ item }} for HAProxy to kubeadm
+          with_items:
+            - 6443
+
+        - name: Set Load Balancer to first node
+          delegate_to: "{{ groups['k8proxy'][0] }}"
+          ansible.builtin.template:
+            src: haproxy.cfg.j2
+            dest: /etc/haproxy/haproxy.cfg
+            owner: root
+            group: root
+            mode: "0644"
+          vars:
+            kube_control_nodes:
+              - "{{ groups['kube_control_plane'][0] }}"
+          when: not kube_config.stat.exists and 'k8proxy' in groups
+          notify: Restart HAProxy
+
+        - name: Slurp Proxy Certs
+          delegate_to: "{{ groups['k8proxy'][0] }}"
+          ansible.builtin.slurp:
+            src: /etc/ssl/certs/kube_certs.crt
+          register: proxy_cert
+          changed_when: false
+
+        - name: Slurp Proxy key
+          delegate_to: "{{ groups['k8proxy'][0] }}"
+          ansible.builtin.slurp:
+            src: /etc/ssl/private/kube_certs.key
+          register: proxy_key
+          changed_when: false
+
+        - name: Write Proxy Cert
+          ansible.builtin.copy:
+            content: "{{ proxy_cert.content | b64decode }}"
+            dest: /etc/kubernetes/pki/front-proxy-ca.crt
+            owner: kube
+            group: docker
+            mode: "0444"
+
+        - name: Write Proxy key
+          ansible.builtin.copy:
+            content: "{{ proxy_key.content | b64decode }}"
+            dest: /etc/kubernetes/pki/front-proxy-ca.key
+            owner: kube
+            group: docker
+            mode: "0440"
+
+    - name: Setup BGP FRR for MetalLB
+      when: kube_install_metallb_real and kube_metallb_mode_real == "BGP"
+      block:
+        - name: Install FRR
+          ansible.builtin.apt:
+            name: frr frr-pythontools
+            state: present
+
+        - name: Configure UFW services
+          community.general.ufw:
+            rule: allow
+            port: "{{ item }}"
+            protocol: tcp
+            comment: Allow {{ item }} for FRR to kubeadm
+          with_items:
+            - 179
+
+        - name: Copy BGP config
+          ansible.builtin.template:
+            src: frr.conf.j2
+            dest: /etc/frr/frr.conf
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Restart FRR
+
+        - name: Enable FRR
+          ansible.builtin.systemd:
+            name: frr
+            enabled: true
+            state: started
 
 - name: Install Kubernetes
   hosts:
-  - kube_control_plane
-  - kube_node
+    - kube_control_plane
+    - kube_node
   tags:
-  - install_k8s
+    - install_k8s
   become: true
   vars:
     k8s_minor_version: v1.32
@@ -168,129 +168,129 @@
     k8s_signing_key_location: "/core:/stable:/{{ k8s_minor_version }}/deb/Release.key"
     docker_repo: "https://download.docker.com"
   handlers:
-  - name: Reload SystemD
-    ansible.builtin.systemd:
-      daemon_reload: true
+    - name: Reload SystemD
+      ansible.builtin.systemd:
+        daemon_reload: true
 
-  - name: Apply sysctl config
-    ansible.posix.sysctl:
-      reload: true
+    - name: Apply sysctl config
+      ansible.posix.sysctl:
+        reload: true
 
-  - name: Restart Containerd
-    ansible.builtin.systemd:
-      name: containerd
-      state: restarted
-      enabled: true
-      daemon_reload: true
+    - name: Restart Containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        enabled: true
+        daemon_reload: true
   tasks:
-  - name: Create Docker group
-    ansible.builtin.group:
-      name: docker
-      state: present
-      gid: 520
+    - name: Create Docker group
+      ansible.builtin.group:
+        name: docker
+        state: present
+        gid: 520
 
-  - name: Create Docker user
-    ansible.builtin.user:
-      name: docker
-      group: docker
-      uid: 520
-      state: present
+    - name: Create Docker user
+      ansible.builtin.user:
+        name: docker
+        group: docker
+        uid: 520
+        state: present
 
-  - name: Add Ansible to docker
-    ansible.builtin.user:
-      name: Ansible
-      groups: docker
-      append: true
+    - name: Add Ansible to docker
+      ansible.builtin.user:
+        name: Ansible
+        groups: docker
+        append: true
 
-  - name: Add conf for containerd
-    ansible.builtin.blockinfile:
-      path: /etc/modules-load.d/containerd.conf
-      mode: "0640"
-      group: docker
-      owner: root
-      create: true
-      block: |
-        overlay
-        br_netfilter
+    - name: Add conf for containerd
+      ansible.builtin.blockinfile:
+        path: /etc/modules-load.d/containerd.conf
+        mode: "0640"
+        group: docker
+        owner: root
+        create: true
+        block: |
+          overlay
+          br_netfilter
 
-  - name: Install Overlay and netfilter moduels
-    community.general.modprobe:
-      name: "{{ item }}"
-      state: present
-    with_items:
-    - overlay
-    - br_netfilter
+    - name: Install Overlay and netfilter moduels
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - overlay
+        - br_netfilter
 
-  - name: Add sysctl conf for containerd
-    ansible.posix.sysctl:
-      sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
-      state: present
-      name: "{{ item }}"
-      reload: true
-      value: "1"
-    with_items:
-    - net.bridge.bridge-nf-call-iptables
-    - net.ipv4.ip_forward
-    - net.bridge.bridge-nf-call-ip6tables
-    notify: Apply sysctl config
+    - name: Add sysctl conf for containerd
+      ansible.posix.sysctl:
+        sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
+        state: present
+        name: "{{ item }}"
+        reload: true
+        value: "1"
+      with_items:
+        - net.bridge.bridge-nf-call-iptables
+        - net.ipv4.ip_forward
+        - net.bridge.bridge-nf-call-ip6tables
+      notify: Apply sysctl config
 
-  - name: Add docker gpg key
-    ansible.builtin.apt_key:
-      url: "{{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }}/gpg"
-      state: present
+    - name: Add docker gpg key
+      ansible.builtin.apt_key:
+        url: "{{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }}/gpg"
+        state: present
 
-  - name: Add Kubernetes apt key
-    ansible.builtin.apt_key:
-      url: "{{ k8s_repo }}{{ k8s_signing_key_location }}"
+    - name: Add Kubernetes apt key
+      ansible.builtin.apt_key:
+        url: "{{ k8s_repo }}{{ k8s_signing_key_location }}"
 
-  - name: Add docker repository
-    ansible.builtin.apt_repository:
-      repo: |-
-        deb [arch=amd64] {{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }} {{ ansible_lsb.codename.lower() }} stable
-      state: present
+    - name: Add docker repository
+      ansible.builtin.apt_repository:
+        repo: |-
+          deb [arch=amd64] {{ docker_repo }}/linux/{{ ansible_lsb.id.lower() }} {{ ansible_lsb.codename.lower() }} stable
+        state: present
 
-  - name: Add Kubernetes repository
-    ansible.builtin.apt_repository:
-      repo: deb {{ k8s_repo }}/core:/stable:/{{ k8s_minor_version }}/deb/ /
-      state: present
+    - name: Add Kubernetes repository
+      ansible.builtin.apt_repository:
+        repo: deb {{ k8s_repo }}/core:/stable:/{{ k8s_minor_version }}/deb/ /
+        state: present
 
-  - name: Write noswap systemd service config file
-    ansible.builtin.template:
-      src: noswap.service.j2
-      dest: /etc/systemd/system/noswap.service
-      owner: root
-      group: root
-      mode: "0644"
+    - name: Write noswap systemd service config file
+      ansible.builtin.template:
+        src: noswap.service.j2
+        dest: /etc/systemd/system/noswap.service
+        owner: root
+        group: root
+        mode: "0644"
 
-  - name: Enable noswap service
-    ansible.builtin.systemd:
-      name: noswap
-      state: started
-      enabled: true
-    notify: Reload SystemD
+    - name: Enable noswap service
+      ansible.builtin.systemd:
+        name: noswap
+        state: started
+        enabled: true
+      notify: Reload SystemD
 
-  - name: Flush handlers
-    ansible.builtin.meta: flush_handlers
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
 
-  - name: Install kube packages
-    ansible.builtin.apt:
-      name:
-      - containerd.io
-      - kubelet
-      - kubecolor
-      - kubeadm
-      - kubectl
-      - apt-transport-https
-      state: present
+    - name: Install kube packages
+      ansible.builtin.apt:
+        name:
+          - containerd.io
+          - kubelet
+          - kubecolor
+          - kubeadm
+          - kubectl
+          - apt-transport-https
+        state: present
 
-  - name: Enable kube services
-    ansible.builtin.systemd:
-      name: "{{ item }}"
-      state: started
-      enabled: true
-    with_items:
-    - kubelet
-    - containerd
+    - name: Enable kube services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      with_items:
+        - kubelet
+        - containerd
 
   # - name: Copy containerd config
   #   ansible.builtin.file:
@@ -305,96 +305,96 @@
   #     path: /etc/containerd/config.toml
   #   notify: Restart Containerd
 
-  - name: Check if containerd config exists
-    ansible.builtin.stat:
-      path: /etc/containerd/config.toml
-    register: containerd_config_file
+    - name: Check if containerd config exists
+      ansible.builtin.stat:
+        path: /etc/containerd/config.toml
+      register: containerd_config_file
 
-  - name: Load containerd defaults
-    ansible.builtin.command:
-      cmd: containerd config default
-    register: containerd_config
-    changed_when: false
-    when: not containerd_config_file.stat.exists
+    - name: Load containerd defaults
+      ansible.builtin.command:
+        cmd: containerd config default
+      register: containerd_config
+      changed_when: false
+      when: not containerd_config_file.stat.exists
 
-  - name: Save containerd config
-    ansible.builtin.copy:
-      content: "{{ containerd_config.stdout }}"
-      dest: /etc/containerd/config.toml
-      mode: "0644"
-      owner: root
-      group: root
-    when: not containerd_config_file.stat.exists
+    - name: Save containerd config
+      ansible.builtin.copy:
+        content: "{{ containerd_config.stdout }}"
+        dest: /etc/containerd/config.toml
+        mode: "0644"
+        owner: root
+        group: root
+      when: not containerd_config_file.stat.exists
 
-  - name: Ensure SystemD Cgroup is set to true
-    ansible.builtin.lineinfile:
-      line: '\g<1>SystemdCgroup = true'
-      regexp: "( +)SystemdCgroup = .+"
-      insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]'
-      path: /etc/containerd/config.toml
-      backrefs: true
-      state: present
-    notify: Restart Containerd
+    - name: Ensure SystemD Cgroup is set to true
+      ansible.builtin.lineinfile:
+        line: "\\g<1>SystemdCgroup = true"
+        regexp: "( +)SystemdCgroup = .+"
+        insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]'
+        path: /etc/containerd/config.toml
+        backrefs: true
+        state: present
+      notify: Restart Containerd
 
-  - name: Ensure containerd snapshotter is set to overlayfs
-    ansible.builtin.lineinfile:
-      line: '\g<1>snapshotter = "overlayfs"'
-      regexp: "( +)snapshotter = .+"
-      insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd]'
-      path: /etc/containerd/config.toml
-      state: present
-      backrefs: true
-    notify: Restart Containerd
+    - name: Ensure containerd snapshotter is set to overlayfs
+      ansible.builtin.lineinfile:
+        line: '\g<1>snapshotter = "overlayfs"'
+        regexp: "( +)snapshotter = .+"
+        insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd]'
+        path: /etc/containerd/config.toml
+        state: present
+        backrefs: true
+      notify: Restart Containerd
 
 - name: Open Firewall on the control plane
   hosts: kube_control_plane
   become: true
   tags:
-  - install_k8s
+    - install_k8s
   tasks:
-  - name: Open Control Plane Ports
-    community.general.ufw:
-      rule: allow
-      port: "{{ item.port }}"
-      protocol: tcp
-      comment: "Allow {{ item.port }}/TCP {{ item.service }}"
-    with_items:
-    - port: 6443
-      service: K8s API
-    - port: 10250
-      service: Kublet API
-    - port: 10259
-      service: kube controller manager
-    - port: 10257
-      service: kube scheduler
-    - port: 2379
-      service: etcd client port
-    - port: 2380
-      service: etcd peer port
-    - port: 2381
-      service: etcd monitoring port
+    - name: Open Control Plane Ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        protocol: tcp
+        comment: "Allow {{ item.port }}/TCP {{ item.service }}"
+      with_items:
+        - port: 6443
+          service: K8s API
+        - port: 10250
+          service: Kublet API
+        - port: 10259
+          service: kube controller manager
+        - port: 10257
+          service: kube scheduler
+        - port: 2379
+          service: etcd client port
+        - port: 2380
+          service: etcd peer port
+        - port: 2381
+          service: etcd monitoring port
 
 - name: Open Firewall on the worker nodes
   hosts: kube_node
   become: true
   tags:
-  - install_k8s
+    - install_k8s
   tasks:
-  - name: Open Worker node Plane Kublet Port
-    community.general.ufw:
-      rule: allow
-      port: "{{ item.port }}"
-      protocol: tcp
-      comment: "Allow {{ item.port }}/TCP {{ item.service }}"
-    with_items:
-    - port: 10250
-      service: Kublet API
-    - port: "30000:32767"
-      service: NodePort Services
+    - name: Open Worker node Plane Kublet Port
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        protocol: tcp
+        comment: "Allow {{ item.port }}/TCP {{ item.service }}"
+      with_items:
+        - port: 10250
+          service: Kublet API
+        - port: "30000:32767"
+          service: NodePort Services
 
 - name: Initialize the first Control Plane
   tags:
-  - control_init
+    - control_init
   become: true
   hosts: kube_control_plane[0]
   strategy: linear
@@ -403,341 +403,341 @@
     kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
     kube_proxy_name_real: "{{ kube_proxy_name | default('k8s-api.internal') }}"
   handlers:
-  - name: Restart HAProxy
-    delegate_to: "{{ groups['k8proxy'][0] }}"
-    ansible.builtin.systemd:
-      name: haproxy
-      state: restarted
-      enabled: true
-      daemon_reload: true
+    - name: Restart HAProxy
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
+        daemon_reload: true
   tasks:
-  - name: Check kube cluster is already initialized
-    ansible.builtin.stat:
-      path: /etc/kubernetes/admin.conf
-    register: kube_config
+    - name: Check kube cluster is already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kube_config
 
-  - name: Write Proxy Cert
-    ansible.builtin.copy:
-      content: "{{ proxy_cert.content | b64decode }}"
-      dest: /etc/kubernetes/pki/front-proxy-ca.crt
-      owner: kube
-      group: docker
-      mode: "0444"
-    when: proxy_cert | default(false)
+    - name: Write Proxy Cert
+      ansible.builtin.copy:
+        content: "{{ proxy_cert.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.crt
+        owner: kube
+        group: docker
+        mode: "0444"
+      when: proxy_cert | default(false)
 
-  - name: Write Proxy key
-    ansible.builtin.copy:
-      content: "{{ proxy_key.content | b64decode }}"
-      dest: /etc/kubernetes/pki/front-proxy-ca.key
-      owner: kube
-      group: docker
-      mode: "0440"
-    when: proxy_key | default(false)
+    - name: Write Proxy key
+      ansible.builtin.copy:
+        content: "{{ proxy_key.content | b64decode }}"
+        dest: /etc/kubernetes/pki/front-proxy-ca.key
+        owner: kube
+        group: docker
+        mode: "0440"
+      when: proxy_key | default(false)
 
-  - name: Set Load Balancer to first node
-    delegate_to: "{{ groups['k8proxy'][0] }}"
-    ansible.builtin.template:
-      src: haproxy.cfg.j2
-      dest: /etc/haproxy/haproxy.cfg
-      owner: root
-      group: root
-      mode: "0644"
-    vars:
-      kube_control_nodes:
-      - "{{ groups['kube_control_plane'][0] }}"
-    when: not kube_config.stat.exists and 'k8proxy' in groups
-    notify: Restart HAProxy
+    - name: Set Load Balancer to first node
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        kube_control_nodes:
+          - "{{ groups['kube_control_plane'][0] }}"
+      when: not kube_config.stat.exists and 'k8proxy' in groups
+      notify: Restart HAProxy
 
-  - name: Flush Handlers
-    ansible.builtin.meta: flush_handlers
+    - name: Flush Handlers
+      ansible.builtin.meta: flush_handlers
 
-  - name: Ensure Containerd is started
-    ansible.builtin.systemd:
-      name: containerd
-      state: started
-      enabled: true
+    - name: Ensure Containerd is started
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+        enabled: true
 
-  - name: Check init_cluster
-    ansible.builtin.command:
-      cmd: |-
-        kubeadm init
-        --control-plane-endpoint "{{ kube_proxy_name_real  }}:6443"
-        --upload-certs
-        --pod-network-cidr "{{ kube_network_real }}"
-        --service-cidr "{{ kube_service_network_real }}"
-      creates: /etc/kubernetes/admin.conf
-    register: adm_output
-    when: not kube_config.stat.exists
-    changed_when: '"Your Kubernetes control-plane" " has initialized successfully!" in adm_output.stdout'
+    - name: Check init_cluster
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm init
+          --control-plane-endpoint "{{ kube_proxy_name_real }}:6443"
+          --upload-certs
+          --pod-network-cidr "{{ kube_network_real }}"
+          --service-cidr "{{ kube_service_network_real }}"
+        creates: /etc/kubernetes/admin.conf
+      register: adm_output
+      when: not kube_config.stat.exists
+      changed_when: '"Your Kubernetes control-plane" " has initialized successfully!" in adm_output.stdout'
 
 - name: Join Other Control Nodes
   hosts: kube_control_plane
   strategy: linear
   tags:
-  - control_init
+    - control_init
   handlers:
-  - name: Restart HAProxy
-    delegate_to: "{{ groups['k8proxy'][0] }}"
-    run_once: true # noqa: run-once
-    become: true
-    ansible.builtin.systemd:
-      name: haproxy
-      state: restarted
-      enabled: true
-      daemon_reload: true
+    - name: Restart HAProxy
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      run_once: true # noqa: run-once
+      become: true
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
+        daemon_reload: true
 
-  - name: Get certificate key
-    delegate_to: "{{ groups['kube_control_plane'][0] }}"
-    run_once: true # noqa: run-once
-    ansible.builtin.command:
-      cmd: sudo kubeadm init phase upload-certs --upload-certs
-    register: certificate_key
-    changed_when: false
+    - name: Get certificate key
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
+      run_once: true # noqa: run-once
+      ansible.builtin.command:
+        cmd: sudo kubeadm init phase upload-certs --upload-certs
+      register: certificate_key
+      changed_when: false
   tasks:
-  - name: Determin if Node Needs Join the cluster
-    ansible.builtin.stat:
-      path: /etc/kubernetes/admin.conf
-    register: node_active
-    changed_when: false
+    - name: Determin if Node Needs Join the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: node_active
+      changed_when: false
 
-  - name: Check if we need the join key
-    ansible.builtin.debug:
-      msg: Check in progress
-    changed_when: not node_active.stat.exists
-    notify: Get certificate key
+    - name: Check if we need the join key
+      ansible.builtin.debug:
+        msg: Check in progress
+      changed_when: not node_active.stat.exists
+      notify: Get certificate key
 
-  - name: If we need to get the key lets get it
-    ansible.builtin.meta: flush_handlers
+    - name: If we need to get the key lets get it
+      ansible.builtin.meta: flush_handlers
 
-  - name: Get Join Command
-    delegate_to: "{{ groups['kube_control_plane'][0] }}"
-    become: true
-    ansible.builtin.command:
-      cmd: |-
-        kubeadm token create
-        --print-join-command
-        --certificate-key "{{ certificate_key.stdout_lines[-1] }}"
-        --ttl 15m
-        --description
-        "Ansible Node {{ inventory_hostname_short }} Join Command"
-    register: join_command
-    changed_when: true
-    when: not node_active.stat.exists
+    - name: Get Join Command
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
+      become: true
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm token create
+          --print-join-command
+          --certificate-key "{{ certificate_key.stdout_lines[-1] }}"
+          --ttl 15m
+          --description
+          "Ansible Node {{ inventory_hostname_short }} Join Command"
+      register: join_command
+      changed_when: true
+      when: not node_active.stat.exists
 
-  - name: Join Node to cluster
-    become: true
-    ansible.builtin.command:
-      cmd: "{{ join_command.stdout }}"
-      creates: /etc/kubernetes/admin.conf
-    register: joined_to_cluster_test
-    when: not node_active.stat.exists
+    - name: Join Node to cluster
+      become: true
+      ansible.builtin.command:
+        cmd: "{{ join_command.stdout }}"
+        creates: /etc/kubernetes/admin.conf
+      register: joined_to_cluster_test
+      when: not node_active.stat.exists
 
-  - name: Gather proxy facts
-    delegate_to: "{{ groups['k8proxy'][0] }}"
-    delegate_facts: true
-    ansible.builtin.gather_facts:
-    when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
+    - name: Gather proxy facts
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      delegate_facts: true
+      ansible.builtin.gather_facts:
+      when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
 
-  - name: Set Load Balancer to all nodes
-    delegate_to: "{{ groups['k8proxy'][0] }}"
-    become: true
-    ansible.builtin.template:
-      src: haproxy.cfg.j2
-      dest: /etc/haproxy/haproxy.cfg
-      owner: root
-      group: root
-      mode: "0644"
-    vars:
-      kube_control_nodes: "{{ groups['kube_control_plane'] }}"
-    notify: Restart HAProxy
-    when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
+    - name: Set Load Balancer to all nodes
+      delegate_to: "{{ groups['k8proxy'][0] }}"
+      become: true
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        kube_control_nodes: "{{ groups['kube_control_plane'] }}"
+      notify: Restart HAProxy
+      when: joined_to_cluster_test.changed and 'k8proxy' in groups # noqa: no-handler
 
 - name: Join Worker Nodes
   hosts: kube_node
   tags:
-  - node_init
+    - node_init
   vars:
     kube_service_network_real: "{{ kube_service_network | default('172.30.128.0/17') }}"
   tasks:
-  - name: Check if node needs join
-    ansible.builtin.stat:
-      path: /etc/kubernetes/kubelet.conf
-    register: node_needs_join
-    changed_when: false
+    - name: Check if node needs join
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: node_needs_join
+      changed_when: false
 
-  - name: Get Join Command
-    delegate_to: "{{ groups['kube_control_plane'][0] }}"
-    become: true
-    ansible.builtin.command:
-      cmd: |-
-        kubeadm token create
-        --print-join-command
-        --ttl 15m
-        --description
-        'Ansible Node {{ inventory_hostname_short }} Join Command'
-    register: node_join_command
-    changed_when: not node_needs_join.stat.exists
-    when: not node_needs_join.stat.exists
+    - name: Get Join Command
+      delegate_to: "{{ groups['kube_control_plane'][0] }}"
+      become: true
+      ansible.builtin.command:
+        cmd: |-
+          kubeadm token create
+          --print-join-command
+          --ttl 15m
+          --description
+          'Ansible Node {{ inventory_hostname_short }} Join Command'
+      register: node_join_command
+      changed_when: not node_needs_join.stat.exists
+      when: not node_needs_join.stat.exists
 
-  - name: Join Node to cluster
-    become: true
-    ansible.builtin.command:
-      cmd: "{{ node_join_command.stdout }}"
-      creates: /etc/kubernetes/kubelet.conf
-    when: not node_needs_join.stat.exists
+    - name: Join Node to cluster
+      become: true
+      ansible.builtin.command:
+        cmd: "{{ node_join_command.stdout }}"
+        creates: /etc/kubernetes/kubelet.conf
+      when: not node_needs_join.stat.exists
 
-  - name: Open UFW to service network
-    become: true
-    community.general.ufw:
-      rule: allow
-      to_ip: "{{ kube_service_network_real }}"
-      from_ip: "{{ kube_service_network_real }}"
+    - name: Open UFW to service network
+      become: true
+      community.general.ufw:
+        rule: allow
+        to_ip: "{{ kube_service_network_real }}"
+        from_ip: "{{ kube_service_network_real }}"
 
 - name: Copy ADM Config
   hosts: kube_control_plane[0]
   tags:
-  - pod_deploy
-  - admin_config
+    - pod_deploy
+    - admin_config
   become: true
   tasks:
-  - name: Ensure Destination Directory Exists
-    delegate_to: localhost
-    ansible.builtin.file:
-      path: /share/k8s
-      state: directory
-      mode: "0770"
-      owner: ansible
-      group: ansible
+    - name: Ensure Destination Directory Exists
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: /share/k8s
+        state: directory
+        mode: "0770"
+        owner: ansible
+        group: ansible
 
-  - name: Copy K8s Admin Config to /share/k8s
-    ansible.builtin.slurp:
-      src: /etc/kubernetes/admin.conf
-    register: k8s_admin_config
+    - name: Copy K8s Admin Config to /share/k8s
+      ansible.builtin.slurp:
+        src: /etc/kubernetes/admin.conf
+      register: k8s_admin_config
 
-  - name: Write K8s Admin Config to /share/k8s
-    delegate_to: localhost
-    ansible.builtin.copy:
-      content: "{{ k8s_admin_config.content | b64decode }}"
-      dest: /share/k8s/admin.conf
-      mode: "0440"
-      owner: ansible
-      group: ansible
+    - name: Write K8s Admin Config to /share/k8s
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ k8s_admin_config.content | b64decode }}"
+        dest: /share/k8s/admin.conf
+        mode: "0440"
+        owner: ansible
+        group: ansible
 
 - name: Open CNI Ports
   hosts:
-  - kube_control_plane
-  - kube_node
+    - kube_control_plane
+    - kube_node
   tags:
-  - pod_deploy
-  - kube_cni
+    - pod_deploy
+    - kube_cni
   become: true
   vars:
     kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
     kube_network_cni_real: "{{ kube_network_cni | default('calico') }}"
   handlers:
-  - name: Restart UFW
-    ansible.builtin.service:
-      name: ufw
-      state: restarted
+    - name: Restart UFW
+      ansible.builtin.service:
+        name: ufw
+        state: restarted
   tasks:
-  - name: Weave Ports
-    tags:
-    - weave_cni
-    when: kube_network_cni_real == "weave"
-    block:
-    - name: Configure UFW 6783/TCP for weave CNI
-      community.general.ufw:
-        rule: allow
-        port: 6783
-        protocol: tcp
-        comment: Allow 6783/TCP for weave CNI
+    - name: Weave Ports
+      tags:
+        - weave_cni
+      when: kube_network_cni_real == "weave"
+      block:
+        - name: Configure UFW 6783/TCP for weave CNI
+          community.general.ufw:
+            rule: allow
+            port: 6783
+            protocol: tcp
+            comment: Allow 6783/TCP for weave CNI
 
-    - name: Configure UFW services 6783:6784 for weave CNI
-      community.general.ufw:
-        rule: allow
-        port: 6783:6784
-        protocol: udp
-        comment: Allow 6783:6784/UDP for weave CNI
+        - name: Configure UFW services 6783:6784 for weave CNI
+          community.general.ufw:
+            rule: allow
+            port: 6783:6784
+            protocol: udp
+            comment: Allow 6783:6784/UDP for weave CNI
 
-    - name: Allow Kube Service Fabric
-      community.general.ufw:
-        rule: allow
-        from_ip: "{{ kube_network_real }}"
-        to_ip: "{{ kube_network_real }}"
-        comment: Allow {{ kube_network_real }} for the KUBE Service Network
+        - name: Allow Kube Service Fabric
+          community.general.ufw:
+            rule: allow
+            from_ip: "{{ kube_network_real }}"
+            to_ip: "{{ kube_network_real }}"
+            comment: Allow {{ kube_network_real }} for the KUBE Service Network
 
-  - name: Calico ports
-    tags:
-    - calico_cni
-    when: kube_network_cni_real == "calico"
-    block:
-    - name: Configure UFW 179/TCP for Calico CNI
-      community.general.ufw:
-        rule: allow
-        port: 179
-        protocol: tcp
-        comment: Allow 179/TCP (BGP) for Calico CNI
-    - name: Configure UFW 4789/UDP for Calico CNI
-      community.general.ufw:
-        rule: allow
-        port: 4789
-        protocol: udp
-        comment: Allow 4789/UDP (VXLAN) for Calico CNI
-    - name: Configure UFW 5473/TCP for Calico CNI
-      community.general.ufw:
-        rule: allow
-        port: 5473
-        protocol: tcp
-        comment: Allow 5473/TCP (Typha) for Calico CNI
-    - name: Configure UFW 51821/UDP for Calico CNI
-      community.general.ufw:
-        rule: allow
-        port: 51821
-        protocol: udp
-        comment: Allow 51821/UDP (IPv6 Wireguard) for Calico CNI
-    - name: Configure UFW 51820/UDP for Calico CNI
-      community.general.ufw:
-        rule: allow
-        port: 51820
-        protocol: udp
-        comment: Allow 51820/UDP (IPv4 Wireguard) for Calico CNI
-    - name: Configure IP Forwarding
-      ansible.builtin.lineinfile:
-        line: DEFAULT_FORWARD_POLICY="ACCEPT"
-        path: /etc/default/ufw
-        regexp: "^DEFAULT_FORWARD_POLICY="
-      notify: Restart UFW
-    - name: Allow Kube Service Fabric
-      community.general.ufw:
-        rule: allow
-        from_ip: "{{ kube_network_real }}"
-        to_ip: "{{ kube_network_real }}"
-        comment: Allow {{ kube_network_real }} for the KUBE Service Network
+    - name: Calico ports
+      tags:
+        - calico_cni
+      when: kube_network_cni_real == "calico"
+      block:
+        - name: Configure UFW 179/TCP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 179
+            protocol: tcp
+            comment: Allow 179/TCP (BGP) for Calico CNI
+        - name: Configure UFW 4789/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 4789
+            protocol: udp
+            comment: Allow 4789/UDP (VXLAN) for Calico CNI
+        - name: Configure UFW 5473/TCP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 5473
+            protocol: tcp
+            comment: Allow 5473/TCP (Typha) for Calico CNI
+        - name: Configure UFW 51821/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 51821
+            protocol: udp
+            comment: Allow 51821/UDP (IPv6 Wireguard) for Calico CNI
+        - name: Configure UFW 51820/UDP for Calico CNI
+          community.general.ufw:
+            rule: allow
+            port: 51820
+            protocol: udp
+            comment: Allow 51820/UDP (IPv4 Wireguard) for Calico CNI
+        - name: Configure IP Forwarding
+          ansible.builtin.lineinfile:
+            line: DEFAULT_FORWARD_POLICY="ACCEPT"
+            path: /etc/default/ufw
+            regexp: "^DEFAULT_FORWARD_POLICY="
+          notify: Restart UFW
+        - name: Allow Kube Service Fabric
+          community.general.ufw:
+            rule: allow
+            from_ip: "{{ kube_network_real }}"
+            to_ip: "{{ kube_network_real }}"
+            comment: Allow {{ kube_network_real }} for the KUBE Service Network
 
-  - name: MetalLB Ports
-    tags:
-    - metallb
-    block:
-    - name: Configure UFW 179/TCP for MetalLB
-      community.general.ufw:
-        rule: allow
-        port: 179
-        protocol: tcp
-        comment: Allow 179/TCP (BGP) for MetalLB
-    - name: L2 Mode
-      community.general.ufw:
-        rule: allow
-        port: 7946
-        protocol: "{{ item }}"
-        comment: Allow 7946/{{ item }} (L2 Arp) for MetalLB
-      with_items:
-      - udp
-      - tcp
+    - name: MetalLB Ports
+      tags:
+        - metallb
+      block:
+        - name: Configure UFW 179/TCP for MetalLB
+          community.general.ufw:
+            rule: allow
+            port: 179
+            protocol: tcp
+            comment: Allow 179/TCP (BGP) for MetalLB
+        - name: L2 Mode
+          community.general.ufw:
+            rule: allow
+            port: 7946
+            protocol: "{{ item }}"
+            comment: Allow 7946/{{ item }} (L2 Arp) for MetalLB
+          with_items:
+            - udp
+            - tcp
 
 - name: Deploy Baseline Pods
   hosts: localhost
   tags:
-  - pod_deploy
+    - pod_deploy
   vars:
     kube_metallb_address_pool_real: "{{ kube_metallb_address_pool | default('172.25.0.10/32') }}"
     kube_network_real: "{{ kube_network | default('10.32.0.0/12') }}"
@@ -748,395 +748,394 @@
     kube_metallb_deployment_startuptime_real: "{{ kube_metallb_deployment_startuptime | default(60) }}"
     kube_metallb_mode_real: "{{ kube_metallb_mode | default('layer2') }}"
   tasks:
-  - name: Install the Latest Weave Version
-    tags:
-    - weave_cni
-    - kube_cni
-    when: kube_network_cni_real == "weave"
-    block:
-    - name: Get Weave Latest Version Info
-      ansible.builtin.uri:
-        url: https://api.github.com/repos/weaveworks/weave/releases/latest
-      register: weave_version
-
-    - name: Get Weave file
-      ansible.builtin.uri:
-        url: >-
-          https://github.com/weaveworks/weave/releases/download/{{- weave_version.json.tag_name -}}/weave-daemonset-k8s.yaml
-        return_content: true
-      register: weave_config_raw
-
-    - name: Parase weave_config and Assemble new Weave Env
-      ansible.builtin.set_fact:
-        weave_config: "{{ weave_config_raw.content | from_yaml }}"
-        weave_network_env:
-          name: IPALLOC_RANGE
-          value: "{{ kube_network_real }}"
-
-    - name: Update weave_config
-      ansible.builtin.set_fact:
-        weave_config_updated: >-
-          {%- for k8s_item in weave_config["items"] -%}
-            {%- if k8s_item.kind == "DaemonSet" -%}
-              {%- for container in k8s_item.spec.template.spec.containers -%}
-                {{- container.__setitem__("env", []) if not container.env-}}
-                {{- container.env.append(weave_network_env) -}}
-              {%- endfor -%}
-              {%- for container in k8s_item.spec.template.spec.initContainers -%}
-                {{- container.__setitem__("env", []) if not container.env-}}
-                {{- container.env.append(weave_network_env) -}}
-              {%- endfor -%}
-            {%- endif -%}
-          {%- endfor -%} {{ weave_config }}
-
-    - name: Setup Weave CNI networking
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf # noqa: jinja
-        state: present
-        definition: "{{ weave_config_updated }}"
-
-  - name: Install the Latest Calico Version
-    tags:
-    - calico_cni
-    - kube_cni
-    when: kube_network_cni_real == "calico"
-    block:
-    - name: Get Calico Latest Version Info
-      ansible.builtin.uri:
-        url: https://api.github.com/repos/projectcalico/calico/releases/latest
-      register: calico_version
-
-    - name: Get Calico operator and custom resource definitions
-      ansible.builtin.uri:
-        url: >-
-          https://raw.github.com/projectcalico/calico/{{- calico_version.json.tag_name -}}/manifests/tigera-operator.yaml
-        return_content: true
-      register: calico_operator_raw
-
-    - name: Create temp directory
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: k8s.calico
-      register: scratch_dir
-
-    - name: Save Calico operator to temp file
-      ansible.builtin.copy:
-        content: "{{ calico_operator_raw.content }}"
-        dest: "{{ scratch_dir.path }}/tigera-operator.yaml"
-        mode: "0444"
-
-    - name: Install Resouce definitions
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf # noqa: jinja
-        state: present
-        src: "{{ scratch_dir.path }}/tigera-operator.yaml"
-
-    - name: Setup Calico Networking
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf # noqa: jinja
-        state: present
-        definition:
-          api_version: "operator.tigera.io/v1"
-          kind: "Installation"
-          metadata:
-            name: default
-          spec:
-            ipAddressPools:
-            - name: default-ipv4-ippool
-              blockSize: 26
-              cidr: kube_network_real
-              encapsulation: "VXLANCrossSubnet"
-              natOutgoing: "Enabled"
-              nodeSelector: all()
-
-    - name: Configure the Calcio API Server
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf # noqa: jinja
-        state: present
-        definition:
-          api_version: "operator.tigera.io/v1"
-          kind: "APIServer"
-          metadata:
-            name: default
-          spec: {}
-    always:
-    - name: Remove temp directory
-      ansible.builtin.file:
-        state: absent
-        path: "{{ scratch_dir.path }}"
-      when: scratch_dir is defined
-
-  - name: Install the MetalLB contoller
-    tags:
-    - metallb
-    when: kube_install_metallb_real
-    block:
-    - name: Get Latest MetalLB version
-      ansible.builtin.uri:
-        url: https://api.github.com/repos/metallb/metallb/releases/latest
-      register: metallb_version_info
-
-    - name: Ensure Strict ARP is disabled
+    - name: Install the Latest Weave Version
+      tags:
+        - weave_cni
+        - kube_cni
+      when: kube_network_cni_real == "weave"
       block:
-      - name: Get Cluster Current Config
-        kubernetes.core.k8s_info:
-          kubeconfig: /share/k8s/admin.conf
-          kind: configmap
-          namespace: kube-system
-          name: kube-proxy
-        register: k8s_kube_proxy_raw
+        - name: Get Weave Latest Version Info
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/weaveworks/weave/releases/latest
+          register: weave_version
 
-      - name: Parse Config Data
-        ansible.builtin.set_fact:
-          k8s_kube_prox_data_parsed: '{{ k8s_kube_proxy_raw.resources[0].data[''config.conf''] | replace(''"'', '''') | from_yaml }}'
+        - name: Get Weave file
+          ansible.builtin.uri:
+            url: >-
+              https://github.com/weaveworks/weave/releases/download/{{- weave_version.json.tag_name -}}/weave-daemonset-k8s.yaml
+            return_content: true
+          register: weave_config_raw
 
-      - name: Update Config Data
-        ansible.builtin.set_fact:
-          k8s_kube_prox_data: "{{ k8s_kube_prox_data_parsed | combine({'ipvs': {'strictARP': false}}, recursive=True) }}"
+        - name: Parase weave_config and Assemble new Weave Env
+          ansible.builtin.set_fact:
+            weave_config: "{{ weave_config_raw.content | from_yaml }}"
+            weave_network_env:
+              name: IPALLOC_RANGE
+              value: "{{ kube_network_real }}"
 
-      - name: Ensure Strict ARP is disabled
-        kubernetes.core.k8s:
-          kubeconfig: /share/k8s/admin.conf
-          kind: configmap
-          namespace: kube-system
-          name: kube-proxy
-          state: present
-          definition:
-            apiVersion: v1
-            kind: ConfigMap
-            metadata:
-              name: kube-proxy
-              namespace: kube-system
-            data:
-              config.conf: "{{ k8s_kube_prox_data | to_nice_yaml(width=80, indent=2) }}"
+        - name: Update weave_config
+          ansible.builtin.set_fact:
+            weave_config_updated: >-
+              {%- for k8s_item in weave_config["items"] -%}
+                {%- if k8s_item.kind == "DaemonSet" -%}
+                  {%- for container in k8s_item.spec.template.spec.containers -%}
+                    {{- container.__setitem__("env", []) if not container.env-}}
+                    {{- container.env.append(weave_network_env) -}}
+                  {%- endfor -%}
+                  {%- for container in k8s_item.spec.template.spec.initContainers -%}
+                    {{- container.__setitem__("env", []) if not container.env-}}
+                    {{- container.env.append(weave_network_env) -}}
+                  {%- endfor -%}
+                {%- endif -%}
+              {%- endfor -%} {{ weave_config }}
 
-    - name: Deploy K8s MetalLB
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf # noqa: jinja
-        state: present
-        src: >-
-          https://raw.githubusercontent.com/metallb/metallb/ {{- metallb_version_info.json.tag_name -}}/config/{{- '' -}} manifests/metallb-native.yaml
-      register: metal_deployed
+        - name: Setup Weave CNI networking
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition: "{{ weave_config_updated }}"
 
-    - name: Wait for metal to startup # noqa: no-handler
-      when: metal_deployed.changed
-      ansible.builtin.wait_for:
-        timeout: "{{ kube_metallb_deployment_startuptime_real }}"
+    - name: Install the Latest Calico Version
+      tags:
+        - calico_cni
+        - kube_cni
+      when: kube_network_cni_real == "calico"
+      block:
+        - name: Get Calico Latest Version Info
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/projectcalico/calico/releases/latest
+          register: calico_version
 
-    - name: Install Pod Networking Addresses
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: present
-        definition:
-          apiVersion: metallb.io/v1beta1
-          kind: IPAddressPool
-          metadata:
-            name: default-address-pool
+        - name: Get Calico operator and custom resource definitions
+          ansible.builtin.uri:
+            url: >-
+              https://raw.github.com/projectcalico/calico/{{- calico_version.json.tag_name -}}/manifests/tigera-operator.yaml
+            return_content: true
+          register: calico_operator_raw
+
+        - name: Create temp directory
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: k8s.calico
+          register: scratch_dir
+
+        - name: Save Calico operator to temp file
+          ansible.builtin.copy:
+            content: "{{ calico_operator_raw.content }}"
+            dest: "{{ scratch_dir.path }}/tigera-operator.yaml"
+            mode: "0444"
+
+        - name: Install Resouce definitions
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            src: "{{ scratch_dir.path }}/tigera-operator.yaml"
+
+        - name: Setup Calico Networking
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition:
+              api_version: "operator.tigera.io/v1"
+              kind: "Installation"
+              metadata:
+                name: default
+              spec:
+                ipAddressPools:
+                  - name: default-ipv4-ippool
+                    blockSize: 26
+                    cidr: kube_network_real
+                    encapsulation: "VXLANCrossSubnet"
+                    natOutgoing: "Enabled"
+                    nodeSelector: all()
+
+        - name: Configure the Calcio API Server
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            definition:
+              api_version: "operator.tigera.io/v1"
+              kind: "APIServer"
+              metadata:
+                name: default
+              spec: {}
+      always:
+        - name: Remove temp directory
+          ansible.builtin.file:
+            state: absent
+            path: "{{ scratch_dir.path }}"
+          when: scratch_dir is defined
+
+    - name: Install the MetalLB contoller
+      tags:
+        - metallb
+      when: kube_install_metallb_real
+      block:
+        - name: Get Latest MetalLB version
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/metallb/metallb/releases/latest
+          register: metallb_version_info
+
+        - name: Ensure Strict ARP is disabled
+          block:
+            - name: Get Cluster Current Config
+              kubernetes.core.k8s_info:
+                kubeconfig: /share/k8s/admin.conf
+                kind: configmap
+                namespace: kube-system
+                name: kube-proxy
+              register: k8s_kube_proxy_raw
+
+            - name: Parse Config Data
+              ansible.builtin.set_fact:
+                k8s_kube_prox_data_parsed: '{{ k8s_kube_proxy_raw.resources[0].data[''config.conf''] | replace(''"'', '''') | from_yaml }}'
+
+            - name: Update Config Data
+              ansible.builtin.set_fact:
+                k8s_kube_prox_data: "{{ k8s_kube_prox_data_parsed | combine({'ipvs': {'strictARP': false}}, recursive=True) }}"
+
+            - name: Ensure Strict ARP is disabled
+              kubernetes.core.k8s:
+                kubeconfig: /share/k8s/admin.conf
+                kind: configmap
+                namespace: kube-system
+                name: kube-proxy
+                state: present
+                definition:
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: kube-proxy
+                    namespace: kube-system
+                  data:
+                    config.conf: "{{ k8s_kube_prox_data | to_nice_yaml(width=80, indent=2) }}"
+
+        - name: Deploy K8s MetalLB
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            src: >-
+              https://raw.githubusercontent.com/metallb/metallb/ {{- metallb_version_info.json.tag_name -}}/config/{{- '' -}} manifests/metallb-native.yaml
+          register: metal_deployed
+
+        - name: Wait for metal to startup # noqa: no-handler
+          when: metal_deployed.changed
+          ansible.builtin.wait_for:
+            timeout: "{{ kube_metallb_deployment_startuptime_real }}"
+
+        - name: Install Pod Networking Addresses
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            definition:
+              apiVersion: metallb.io/v1beta1
+              kind: IPAddressPool
+              metadata:
+                name: default-address-pool
+                namespace: metallb-system
+              spec:
+                addresses:
+                  - "{{ kube_metallb_address_pool_real }}"
+                autoAssign: true
+
+        - name: Install Pod L2 config
+          tags:
+            - metal-l2_advertise
+          when: kube_metallb_mode_real == "layer2"
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            api_version: metallb.io/v1beta1
+            kind: L2Advertisement
+            name: l2-advertisment
             namespace: metallb-system
-          spec:
-            addresses:
-            - "{{ kube_metallb_address_pool_real }}"
-            autoAssign: true
+            definition:
+              spec:
+                ipAddressPools:
+                  - default-address-pool
 
-    - name: Install Pod L2 config
-      tags:
-      - metal-l2_advertise
-      when: kube_metallb_mode_real == "layer2"
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: present
-        api_version: metallb.io/v1beta1
-        kind: L2Advertisement
-        name: l2-advertisment
-        namespace: metallb-system
-        definition:
-          spec:
-            ipAddressPools:
-            - default-address-pool
+        - name: Install BGP config
+          tags:
+            - metal-bgp_advertise
+          when: kube_metallb_mode_real == "bgp"
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            api_version: metallb.io/v1beta1
+            kind: BGPAdvertisement
+            name: bgp-advertisment
+            namespace: metallb-system
+            definition:
+              spec:
+                ipAddressPools:
+                  - default-address-pool
 
-    - name: Install BGP config
-      tags:
-      - metal-bgp_advertise
-      when: kube_metallb_mode_real == "bgp"
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: present
-        api_version: metallb.io/v1beta1
-        kind: BGPAdvertisement
-        name: bgp-advertisment
-        namespace: metallb-system
-        definition:
-          spec:
-            ipAddressPools:
-            - default-address-pool
+        - name: Install BFD Profile
+          tags:
+            - metal-bgp_advertise
+          when: kube_metallb_mode_real == "bgp"
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            api_version: metallb.io/v1beta1
+            kind: BFDProfile
+            name: default-bfd-profile
+            namespace: metallb-system
+            definition:
+              spec:
+                detectMultiplier: 37
+                echoMode: true
+                minimumTtl: 10
+                passiveMode: true
+                receiveInterval: 35
+                transmitInterval: 35
 
-    - name: Install BFD Profile
-      tags:
-      - metal-bgp_advertise
-      when: kube_metallb_mode_real == "bgp"
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: present
-        api_version: metallb.io/v1beta1
-        kind: BFDProfile
-        name: default-bfd-profile
-        namespace: metallb-system
-        definition:
-          spec:
-            detectMultiplier: 37
-            echoMode: true
-            minimumTtl: 10
-            passiveMode: true
-            receiveInterval: 35
-            transmitInterval: 35
-
-    - name: When Kube Proxy is avalibe
-      tags:
-      - metal-bgp_advertise
-      when: kube_metallb_mode_real == "bgp" and 'k8proxy' in groups
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: present
-        api_version: metallb.io/v1beta1
-        kind: BGPAdvertisement
-        name: bgp-advertisment-{{ item }}
-        namespace: metallb-system
-        definition:
-          spec:
-            myASN: 65001
-            peerASN: 65002
-            peerAddress: "{{ hostvars[item].ansible_default_ipv4.address }}"
-            bfdProfile: default-bfd-profile
-      with_items:
-      - "{{ groups['k8proxy'] }}"
-
-  - name: Install CoreDNS
-    tags:
-    - coredns
-    when: kube_install_coredns is defined and kube_install_coredns | default(false)
-    block:
-    - name: Install the CoreDNS Helm repo
-      kubernetes.core.helm_repository:
-        kubeconfig: /share/k8s/admin.conf
-        repo_name: coredns
-        repo_state: present
-        repo_url: https://coredns.github.io/helm
+        - name: When Kube Proxy is avalibe
+          tags:
+            - metal-bgp_advertise
+          when: kube_metallb_mode_real == "bgp" and 'k8proxy' in groups
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: present
+            api_version: metallb.io/v1beta1
+            kind: BGPAdvertisement
+            name: bgp-advertisment-{{ item }}
+            namespace: metallb-system
+            definition:
+              spec:
+                myASN: 65001
+                peerASN: 65002
+                peerAddress: "{{ hostvars[item].ansible_default_ipv4.address }}"
+                bfdProfile: default-bfd-profile
+          with_items:
+            - "{{ groups['k8proxy'] }}"
 
     - name: Install CoreDNS
-      kubernetes.core.helm:
-        kubeconfig: /share/k8s/admin.conf
-        chart_ref: coredns/coredns
-        name: coredns
-        state: present
-        namespace: kube-system
+      tags:
+        - coredns
+      when: kube_install_coredns is defined and kube_install_coredns | default(false)
+      block:
+        - name: Install the CoreDNS Helm repo
+          kubernetes.core.helm_repository:
+            kubeconfig: /share/k8s/admin.conf
+            repo_name: coredns
+            repo_state: present
+            repo_url: https://coredns.github.io/helm
 
-  - name: Install the Traefik Ingest controller
-    tags:
-    - traefik_ingest
-    when: kube_ingress_controller_real == "traefik"
-    block:
-    - name: Install the Traefik Helm repo
-      kubernetes.core.helm_repository:
-        kubeconfig: /share/k8s/admin.conf
-        repo_name: traefik
-        repo_state: present
-        repo_url: https://traefik.github.io/charts
+        - name: Install CoreDNS
+          kubernetes.core.helm:
+            kubeconfig: /share/k8s/admin.conf
+            chart_ref: coredns/coredns
+            name: coredns
+            state: present
+            namespace: kube-system
 
     - name: Install the Traefik Ingest controller
-      kubernetes.core.helm:
-        kubeconfig: /share/k8s/admin.conf
-        chart_ref: traefik/traefik
-        name: traefik
-        state: present
-        release_namespace: traefik
-        create_namespace: true
-        values:
-          ports:
-            dns-udp:
-              expose: true
-              port: 9053
-              exposedPort: 53
-              protocol: UDP
-            dns-tcp:
-              expose: true
-              port: 9053
-              exposedPort: 53
-              protocol: UDP
-            sdns:
-              expose: true
-              port: 8853
-              exposedPort: 853
-              protocol: TCP
+      tags:
+        - traefik_ingest
+      when: kube_ingress_controller_real == "traefik"
+      block:
+        - name: Install the Traefik Helm repo
+          kubernetes.core.helm_repository:
+            kubeconfig: /share/k8s/admin.conf
+            repo_name: traefik
+            repo_state: present
+            repo_url: https://traefik.github.io/charts
 
-    - name: Set Traefik LB IP
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: patched
-        kind: Service
-        namespace: traefik
-        name: traefik
-        definition:
-          metadata:
-            annotations:
-              metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
+        - name: Install the Traefik Ingest controller
+          kubernetes.core.helm:
+            kubeconfig: /share/k8s/admin.conf
+            chart_ref: traefik/traefik
+            name: traefik
+            state: present
+            release_namespace: traefik
+            create_namespace: true
+            values:
+              ports:
+                dns-udp:
+                  expose: true
+                  port: 9053
+                  exposedPort: 53
+                  protocol: UDP
+                dns-tcp:
+                  expose: true
+                  port: 9053
+                  exposedPort: 53
+                  protocol: UDP
+                sdns:
+                  expose: true
+                  port: 8853
+                  exposedPort: 853
+                  protocol: TCP
 
-  - name: Install the Nginx Ingest controller
-    tags:
-    - nginx_ingest
-    when: kube_ingress_controller_real == "nginx"
-    block:
-    - name: Install the Nginx Helm repo
-      kubernetes.core.helm_repository:
-        kubeconfig: /share/k8s/admin.conf
-        repo_name: nginx-stable
-        repo_state: present
-        repo_url: https://helm.nginx.com/stable
+        - name: Set Traefik LB IP
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: patched
+            kind: Service
+            namespace: traefik
+            name: traefik
+            definition:
+              metadata:
+                annotations:
+                  metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
 
     - name: Install the Nginx Ingest controller
-      kubernetes.core.helm:
-        kubeconfig: /share/k8s/admin.conf
-        chart_ref: nginx-stable/nginx-ingress
-        name: nginx-ingress
-        state: present
-        release_namespace: nginx-ingress
-        create_namespace: true
+      tags:
+        - nginx_ingest
+      when: kube_ingress_controller_real == "nginx"
+      block:
+        - name: Install the Nginx Helm repo
+          kubernetes.core.helm_repository:
+            kubeconfig: /share/k8s/admin.conf
+            repo_name: nginx-stable
+            repo_state: present
+            repo_url: https://helm.nginx.com/stable
 
-    - name: Set Nginx LB IP
-      kubernetes.core.k8s:
-        kubeconfig: /share/k8s/admin.conf
-        state: patched
-        kind: Service
-        namespace: nginx-ingress
-        name: nginx-ingress-controller
-        definition:
-          metadata:
-            annotations:
-              metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
+        - name: Install the Nginx Ingest controller
+          kubernetes.core.helm:
+            kubeconfig: /share/k8s/admin.conf
+            chart_ref: nginx-stable/nginx-ingress
+            name: nginx-ingress
+            state: present
+            release_namespace: nginx-ingress
+            create_namespace: true
 
-  - name: Install the K8s Dashboard
-    tags:
-      - k8s_dashboard
-    block:
-      - name: Get Latest k8s Dashboard
-        ansible.builtin.uri:
-          url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
-        register: dashboard_version_info
-      - name: Compute version
-        ansible.builtin.set_fact:
-          dashboard_version: |-
-            {%- set found_version = [false] -%}
-            {%- for item in dashboard_version_info.json -%}
-            {%- if not found_version[0] and not item.draft -%}
-            {%- if not item.prerelease -%}
-            {%- if "-alpha" not in item.name and "-beta" not in item.name -%}
-            {{- item.name -}}
-            {{- found_version.insert(0, true) -}}
-            {%- endif -%}{%- endif -%}{%- endif -%}
-            {%- endfor -%}
-      - name: Deploy K8s Dashboard
-        kubernetes.core.k8s:
-          kubeconfig: /share/k8s/admin.conf # noqa: jinja
-          state: present
-          src: >
-            https://raw.githubusercontent.com/kubernetes/dashboard/
-            {{- dashboard_version -}}/aio/deploy/recommended.yaml
+        - name: Set Nginx LB IP
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: patched
+            kind: Service
+            namespace: nginx-ingress
+            name: nginx-ingress-controller
+            definition:
+              metadata:
+                annotations:
+                  metallb.universe.tf/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
+
+    - name: Install the K8s Dashboard
+      tags:
+        - k8s_dashboard
+      block:
+        - name: Get Latest k8s Dashboard
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/kubernetes/dashboard/releases?per_page=10
+          register: dashboard_version_info
+        - name: Compute version
+          ansible.builtin.set_fact:
+            dashboard_version: |-
+              {%- set found_version = [false] -%}
+              {%- for item in dashboard_version_info.json -%}
+              {%- if not found_version[0] and not item.draft -%}
+              {%- if not item.prerelease -%}
+              {%- if "-alpha" not in item.name and "-beta" not in item.name -%}
+              {{- item.name -}}
+              {{- found_version.insert(0, true) -}}
+              {%- endif -%}{%- endif -%}{%- endif -%}
+              {%- endfor -%}
+        - name: Deploy K8s Dashboard
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf # noqa: jinja
+            state: present
+            src: >
+              https://raw.githubusercontent.com/kubernetes/dashboard/ {{- dashboard_version -}}/aio/deploy/recommended.yaml
