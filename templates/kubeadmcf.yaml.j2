@@ -1,4 +1,4 @@
-{%- set proxy_name = hostvars[inventory_hostname]["groups"]["k8proxy"][0] | k8s_proxy_name -%}
+{%- set proxy_name = hostvars[inventory_hostname]["groups"]["k8proxy"][0] | kube_proxy_name -%}
 apiVersion: kubeadm.k8s.io/v1beta1
 kind: ClusterConfiguration
 kubernetesVersion: stable

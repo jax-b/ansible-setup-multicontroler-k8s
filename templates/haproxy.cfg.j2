@@ -27,24 +27,21 @@ defaults
   timeout connect 5000
   timeout client  50000
   timeout server  50000
-  errorfile 400 /etc/haproxy/errors/400.http
-  errorfile 403 /etc/haproxy/errors/403.http
-  errorfile 408 /etc/haproxy/errors/408.http
-  errorfile 500 /etc/haproxy/errors/500.http
-  errorfile 502 /etc/haproxy/errors/502.http
-  errorfile 503 /etc/haproxy/errors/503.http
-  errorfile 504 /etc/haproxy/errors/504.http
+  retries 3
 
-frontend kubernetes
+frontend kubernetes-apiserver-https-listener ()
   bind {{ node_address }}:6443
-  option tcplog
   mode tcp
-  default_backend kubernetes-conductor-nodes
+  default_backend kubernetes-apiserver-backend
+  timeout client 3h
 
 backend kubernetes-conductor-nodes
   mode tcp
   balance roundrobin
-  option tcp-check
+  option ssl-hello-chk
+  
+  timeout server 3h
+
 {% for host_number in range(kube_control_nodes|length) %}
-  server k8s1-conductor-{{ host_number }} {{ kube_control_nodes[host_number] }}:6443 check fall 3 rise 2
+  server {{ kube_control_nodes[host_number] }} {{ kube_control_nodes[host_number].ansible_host }}:6443 check inter 5s port 6443
 {% endfor %}
