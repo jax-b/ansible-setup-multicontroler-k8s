@@ -1050,6 +1050,14 @@
         - coredns
       when: kube_install_coredns is defined and kube_install_coredns | default(false)
       block:
+        - name: Remove KubeDNS
+          kubernetes.core.k8s:
+            kubeconfig: /share/k8s/admin.conf
+            state: absent
+            kind: Deployment
+            namespace: kube-system
+            name: kubedns
+
         - name: Install the CoreDNS Helm repo
           kubernetes.core.helm_repository:
             kubeconfig: /share/k8s/admin.conf
@@ -1064,6 +1072,9 @@
             name: coredns
             state: present
             namespace: kube-system
+            values:
+              service:
+                clusterIP: "{{ (kube_service_network | split('.'))[0:3] | join('.') }}.10"
 
     - name: Install the Traefik Ingest controller
       tags:
