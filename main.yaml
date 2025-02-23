@@ -1131,25 +1131,30 @@
         - nginx_ingest
       when: kube_ingress_controller_real == "nginx"
       block:
+        - name: Install the Traefik Helm repo
+          kubernetes.core.helm_repository:
+            kubeconfig: /share/k8s/admin.conf
+            repo_name: ingress-nginx
+            repo_state: present
+            repo_url: "https://kubernetes.github.io/ingress-nginx"
+
         - name: Install the Nginx Ingest controller
           kubernetes.core.helm:
             kubeconfig: /share/k8s/admin.conf
-            chart_ref: oci://ghcr.io/nginx/charts/nginx-ingress
-            name: nginx-ingress
+            chart_ref: ingress-nginx/ingress-nginx
+            name: ingress-nginx
             state: present
-            release_namespace: nginx-ingress
+            release_namespace: ingress-nginx
             create_namespace: true
             values:
-
-        - name: Set Nginx LB IP
-          kubernetes.core.k8s:
-            kubeconfig: /share/k8s/admin.conf
-            state: patched
-            kind: Service
-            namespace: nginx-ingress
-            name: nginx-ingress-controller
-            definition:
-              metadata:
-                annotations:
-                  metallb.io/address-pool: default-address-pool
-                  metallb.io/loadBalancerIPs: "{{ kube_ingress_ipaddress_real }}"
+              controller:
+                ingressClassResource:
+                  default: true
+                service:
+                  loadBalancerIP: "{{ kube_ingress_ipaddress_real }}"
+                autoscaling:
+                  enabled: true
+                  minReplicas: 1
+                  maxReplicas: 5
+                  targetCPUUtilizationPercentage: 80
+                  targetMemoryUtilizationPercentage: 80
